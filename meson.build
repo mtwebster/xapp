@@ -28,7 +28,7 @@ top_inc = include_directories('.')
 
 subdir('libxapp')
 # subdir('po')
-subdir('pygobject')
+# subdir('pygobject')
 subdir('files')
 subdir('schemas')
 

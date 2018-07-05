@@ -6,22 +6,22 @@ libdeps += dependency('glib-2.0', version: glib_min_ver, required: true)
 libdeps += dependency('gtk+-3.0', version: '>=3.3.16', required: true)
 libdeps += dependency('gdk-pixbuf-2.0', version: '>=2.22.0', required: true)
 libdeps += dependency('cairo', required: true)
-libdeps += dependency('libgnomekbdui', required: true)
-libdeps += dependency('x11', required: true)
+# libdeps += dependency('libgnomekbdui', required: true)
+# libdeps += dependency('x11', required: true)
 
 xapp_headers = [
-    'xapp-gtk-window.h',
-    'xapp-kbd-layout-controller.h',
+    # 'xapp-gtk-window.h',
+    # 'xapp-kbd-layout-controller.h',
     'xapp-monitor-blanker.h',
     'xapp-preferences-window.h'
 ]
 
 xapp_sources = [
-    'xapp-glade-catalog.c',
-    'xapp-gtk-window.c',
-    'xapp-kbd-layout-controller.c',
+    # 'xapp-glade-catalog.c',
+    # 'xapp-gtk-window.c',
+    # 'xapp-kbd-layout-controller.c',
     'xapp-monitor-blanker.c',
-    'xapp-preferences-window.c',
+    'xapp-preferences-window.c'
 ]
 
 libxapp = library('xapp',
@@ -66,13 +66,13 @@ pkg.generate(
     requires_private: 'xkbfile',
 )
 
-install_data(['xapp-glade-catalog.xml'],
-    install_dir : join_paths(get_option('datadir'), 'glade/catalogs')
-)
+# install_data(['xapp-glade-catalog.xml'],
+#     install_dir : join_paths(get_option('datadir'), 'glade/catalogs')
+# )
 
-gnome.generate_vapi('xapp',
-    packages: ['glib-2.0', 'gio-unix-2.0', 'gtk+-3.0'],
-    sources: gir[0],
-    metadata_dirs: meson.current_source_dir(),
-    install: true
-)
+# gnome.generate_vapi('xapp',
+#     packages: ['glib-2.0', 'gio-unix-2.0', 'gtk+-3.0'],
+#     sources: gir[0],
+#     metadata_dirs: meson.current_source_dir(),
+#     install: true
+# )
