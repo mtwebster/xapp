@@ -24,7 +24,7 @@ typedef struct
     XAppIconSize     icon_size;
     GCancellable    *cancellable;
     GtkListStore    *category_list;
-    GtkListStore    *icon_store;
+    GtkListStore    *search_icon_store;
     GList           *full_icon_list;
     GHashTable      *categories;
     GtkWidget       *search_bar;
@@ -34,6 +34,8 @@ typedef struct
     GtkWidget       *browse_button;
     GtkWidget       *action_area;
     gchar           *icon_string;
+    gchar           *current_text;
+    gulong           search_changed_id;
     gboolean         allow_paths;
 } XAppIconChooserDialogPrivate;
 
@@ -176,6 +178,11 @@ static gint list_box_sort (GtkListBoxRow *row1,
                            GtkListBoxRow *row2,
                            gpointer       user_data);
 
+static gint search_model_sort (GtkTreeModel *model,
+                               GtkTreeIter  *a,
+                               GtkTreeIter  *b,
+                               gpointer      user_data);
+
 static void
 free_category_info (IconCategoryInfo *category_info)
 {
@@ -280,6 +287,7 @@ xapp_icon_chooser_dialog_dispose (GObject *object)
     }
 
     g_clear_pointer (&priv->icon_string, g_free);
+    g_clear_pointer (&priv->current_text, g_free);
     g_clear_object (&priv->cancellable);
 
     G_OBJECT_CLASS (xapp_icon_chooser_dialog_parent_class)->dispose (object);
@@ -310,13 +318,22 @@ xapp_icon_chooser_dialog_init (XAppIconChooserDialog *dialog)
     priv->categories = g_hash_table_new_full (NULL, NULL, NULL, (GDestroyNotify) free_category_info);
     priv->response = GTK_RESPONSE_NONE;
     priv->icon_string = NULL;
+    priv->current_text = NULL;
     priv->cancellable = NULL;
     priv->allow_paths = TRUE;
 
-    priv->icon_store = gtk_list_store_new (3, G_TYPE_STRING, G_TYPE_STRING, GDK_TYPE_PIXBUF);
-    gtk_tree_sortable_set_sort_column_id (GTK_TREE_SORTABLE (priv->icon_store), COLUMN_DISPLAY_NAME,
+    priv->search_icon_store = gtk_list_store_new (3, G_TYPE_STRING, G_TYPE_STRING, GDK_TYPE_PIXBUF);
+
+    gtk_tree_sortable_set_sort_func (GTK_TREE_SORTABLE (priv->search_icon_store),
+                                     COLUMN_DISPLAY_NAME,
+                                     search_model_sort,
+                                     priv,
+                                     NULL);
+    gtk_tree_sortable_set_sort_column_id (GTK_TREE_SORTABLE (priv->search_icon_store),
+                                          COLUMN_DISPLAY_NAME,
                                           GTK_SORT_ASCENDING);
-    g_signal_connect (priv->icon_store, "row-inserted",
+
+    g_signal_connect (priv->search_icon_store, "row-inserted",
                       G_CALLBACK (on_icon_store_icons_added), dialog);
 
     gtk_window_set_default_size (GTK_WINDOW (dialog), 600, 400);
@@ -345,8 +362,8 @@ xapp_icon_chooser_dialog_init (XAppIconChooserDialog *dialog)
     gtk_box_pack_start (GTK_BOX (toolbar_box), priv->search_bar, TRUE, TRUE, 0);
     gtk_entry_set_placeholder_text (GTK_ENTRY (priv->search_bar), _("Search"));
 
-    g_signal_connect (priv->search_bar, "search-changed",
-                      G_CALLBACK (on_search_text_changed), dialog);
+    priv->search_changed_id = g_signal_connect (priv->search_bar, "search-changed",
+                                                G_CALLBACK (on_search_text_changed), dialog);
     g_signal_connect (priv->search_bar, "key-press-event",
                       G_CALLBACK (on_search_bar_key_pressed), dialog);
 
@@ -731,7 +748,9 @@ search_model_sort (GtkTreeModel *model,
     gboolean     b_starts_with;
     gint ret;
 
-    search_str = g_strdup (user_data);
+    XAppIconChooserDialogPrivate *priv = (XAppIconChooserDialogPrivate *) user_data;
+
+    search_str = priv->current_text;
 
     gtk_tree_model_get (model, a, COLUMN_DISPLAY_NAME, &a_value, -1);
     gtk_tree_model_get (model, b, COLUMN_DISPLAY_NAME, &b_value, -1);
@@ -769,24 +788,8 @@ search_model_sort (GtkTreeModel *model,
 
     g_free (a_value);
     g_free (b_value);
-    g_free (search_str);
 
     return ret;
-}
-
-static gint
-category_model_sort (GtkTreeModel *model,
-                     GtkTreeIter  *a,
-                     GtkTreeIter  *b,
-                     gpointer      user_data)
-{
-    gchar *a_value;
-    gchar *b_value;
-
-    gtk_tree_model_get (model, a, COLUMN_DISPLAY_NAME, &a_value, -1);
-    gtk_tree_model_get (model, b, COLUMN_DISPLAY_NAME, &b_value, -1);
-
-    return g_strcmp0 (a_value, b_value);
 }
 
 static void
@@ -835,10 +838,7 @@ load_categories (XAppIconChooserDialog *dialog)
         g_signal_connect (category_info->model, "row-inserted",
                           G_CALLBACK (on_icon_store_icons_added), dialog);
 
-        gtk_tree_sortable_set_sort_func (GTK_TREE_SORTABLE (category_info->model), COLUMN_DISPLAY_NAME,
-                                         category_model_sort, NULL, NULL);
-        gtk_tree_sortable_set_sort_column_id (GTK_TREE_SORTABLE (category_info->model), COLUMN_DISPLAY_NAME,
-                                              GTK_SORT_ASCENDING);
+        category_info->icons = g_list_sort (category_info->icons, (GCompareFunc) g_utf8_collate);
 
         row = gtk_list_box_row_new ();
         label = gtk_label_new (category_info->name);
@@ -1013,7 +1013,10 @@ on_category_selected (GtkListBox            *list_box,
         priv->cancellable = NULL;
     }
 
+    g_signal_handler_block (priv->search_bar, priv->search_changed_id);
     gtk_entry_set_text (GTK_ENTRY (priv->search_bar), "");
+    g_signal_handler_unblock (priv->search_bar, priv->search_changed_id);
+
     selection = gtk_list_box_get_selected_rows (GTK_LIST_BOX (priv->list_box));
 
     if (!selection)
@@ -1142,9 +1145,6 @@ search_path (XAppIconChooserDialog *dialog,
         child_info = g_file_enumerator_next_file (children, NULL, NULL);
     }
 
-    gtk_tree_sortable_set_sort_func (GTK_TREE_SORTABLE (icon_store), COLUMN_DISPLAY_NAME, search_model_sort,
-                                     (gpointer) search_str, NULL);
-
     g_file_enumerator_close (children, NULL, NULL);
     g_object_unref (children);
     g_object_unref (dir);
@@ -1167,12 +1167,10 @@ search_icon_name (XAppIconChooserDialog *dialog,
 
     theme = gtk_icon_theme_get_default ();
 
-    gtk_tree_sortable_set_sort_func (GTK_TREE_SORTABLE (icon_store), COLUMN_DISPLAY_NAME, search_model_sort,
-                                     (gpointer) name_string, NULL);
-
     if (priv->full_icon_list == NULL)
     {
         priv->full_icon_list = gtk_icon_theme_list_icons (theme, NULL);
+        priv->full_icon_list = g_list_sort (priv->full_icon_list, (GCompareFunc) g_utf8_collate);
     }
 
     icons = priv->full_icon_list;
@@ -1209,6 +1207,7 @@ on_search_text_changed (GtkSearchEntry        *entry,
 
     if (g_strcmp0 (search_text, "") == 0)
     {
+        g_clear_pointer (&priv->current_text, g_free);
         on_category_selected (GTK_LIST_BOX (priv->list_box), dialog);
     }
     else
@@ -1218,18 +1217,21 @@ on_search_text_changed (GtkSearchEntry        *entry,
     }
     else
     {
-        gtk_list_store_clear (GTK_LIST_STORE (priv->icon_store));
-        gtk_icon_view_set_model (GTK_ICON_VIEW (priv->icon_view), GTK_TREE_MODEL (priv->icon_store));
+        g_free (priv->current_text);
+        priv->current_text = g_strdup (search_text);
+
+        gtk_list_store_clear (GTK_LIST_STORE (priv->search_icon_store));
+        gtk_icon_view_set_model (GTK_ICON_VIEW (priv->icon_view), GTK_TREE_MODEL (priv->search_icon_store));
         if (g_strrstr (search_text, "/"))
         {
             if (priv->allow_paths)
             {
-                search_path (dialog, search_text, priv->icon_store, priv->cancellable);
+                search_path (dialog, search_text, priv->search_icon_store, priv->cancellable);
             }
         }
         else
         {
-            search_icon_name (dialog, search_text, priv->icon_store, priv->cancellable, priv->icon_size);
+            search_icon_name (dialog, search_text, priv->search_icon_store, priv->cancellable, priv->icon_size);
         }
     }
 }
