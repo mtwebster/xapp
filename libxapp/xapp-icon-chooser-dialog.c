@@ -1,5 +1,6 @@
 #include <config.h>
 #include <gdk/gdk.h>
+#include <math.h>
 #include "xapp-enums.h"
 #include "xapp-icon-chooser-dialog.h"
 #include "xapp-stack-sidebar.h"
@@ -52,6 +53,7 @@ typedef struct
     GtkListStore    *model;
     gchar           *short_name;
     gchar           *long_name;
+    gint             size;
 } FileIconInfoLoadCallbackInfo;
 
 typedef struct
@@ -854,6 +856,45 @@ load_categories (XAppIconChooserDialog *dialog)
     gtk_list_box_select_row (GTK_LIST_BOX (priv->list_box), row);
 }
 
+GdkPixbuf *
+wrangle_pixbuf_size (GdkPixbuf *pixbuf,
+                     gint       icon_size)
+{
+    gint width, height, new_width, new_height;
+    GdkPixbuf *out_pixbuf;
+
+    new_width = new_height = -1;
+
+    width = gdk_pixbuf_get_width (pixbuf);
+    height = gdk_pixbuf_get_height (pixbuf);
+
+    if ((width > height ? width : height) > icon_size)
+    {
+        if (width > icon_size)
+        {
+            new_width = icon_size;
+            new_height = floor (((float) height / width) * new_width);
+        }
+        else if (height > icon_size)
+        {
+            new_height = icon_size;
+            new_width = floor (((float) width / height) * new_height);
+        }
+
+        out_pixbuf = gdk_pixbuf_scale_simple (pixbuf,
+                                              new_width,
+                                              new_height,
+                                              GDK_INTERP_BILINEAR);
+    }
+    else
+    {
+        out_pixbuf = g_object_ref (pixbuf);
+    }
+
+    return out_pixbuf;
+}
+
+
 static void
 finish_pixbuf_load_from_file (GObject      *stream,
                               GAsyncResult *res,
@@ -872,11 +913,17 @@ finish_pixbuf_load_from_file (GObject      *stream,
 
     if (error == NULL)
     {
+        GdkPixbuf *final_pixbuf;
+
+        final_pixbuf = wrangle_pixbuf_size (pixbuf,
+                                            callback_info->size);
+        g_object_unref (pixbuf);
+
         gtk_list_store_append (callback_info->model, &iter);
         gtk_list_store_set (callback_info->model, &iter,
                             COLUMN_DISPLAY_NAME, callback_info->short_name,
                             COLUMN_FULL_NAME, callback_info->long_name,
-                            COLUMN_PIXBUF, pixbuf,
+                            COLUMN_PIXBUF, final_pixbuf,
                             -1);
     }
     else if (error->domain != G_IO_ERROR || error->code != G_IO_ERROR_CANCELLED)
@@ -886,7 +933,6 @@ finish_pixbuf_load_from_file (GObject      *stream,
 
     free_file_load_callback_info (callback_info);
     g_clear_error (&error);
-    g_object_unref (pixbuf);
     g_object_unref (stream);
 }
 
@@ -997,14 +1043,18 @@ on_category_selected (GtkListBox            *list_box,
 }
 
 static void
-search_path (const gchar  *path_string,
-             GtkListStore *icon_store,
-             GCancellable *cancellable)
+search_path (XAppIconChooserDialog *dialog,
+             const gchar           *path_string,
+             GtkListStore          *icon_store,
+             GCancellable          *cancellable)
 {
+    XAppIconChooserDialogPrivate *priv;
     gchar            *search_str = NULL;
     GFile            *dir;
     GFileEnumerator  *children;
     GFileInfo        *child_info;
+
+    priv = xapp_icon_chooser_dialog_get_instance_private (dialog);
 
     if (g_file_test (path_string, G_FILE_TEST_IS_DIR))
     {
@@ -1067,6 +1117,7 @@ search_path (const gchar  *path_string,
                     callback_info->model = icon_store;
                     callback_info->short_name = g_strdup (child_name);
                     callback_info->long_name = g_strdup (child_path);
+                    callback_info->size = priv->icon_size;
                     gdk_pixbuf_new_from_stream_async (G_INPUT_STREAM (stream),
                                                       cancellable,
                                                       (GAsyncReadyCallback) finish_pixbuf_load_from_file,
@@ -1173,7 +1224,7 @@ on_search (GtkSearchEntry        *entry,
         {
             if (priv->allow_paths)
             {
-                search_path (search_text, priv->icon_store, priv->cancellable);
+                search_path (dialog, search_text, priv->icon_store, priv->cancellable);
             }
         }
         else
