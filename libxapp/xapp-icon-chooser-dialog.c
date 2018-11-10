@@ -46,8 +46,10 @@ struct _XAppIconChooserDialog
 
 typedef struct
 {
-    GtkListStore    *model;
-    const gchar     *name;
+    XAppIconChooserDialog *dialog;
+    GtkListStore          *model;
+    GdkPixbuf             *pixbuf;
+    const gchar           *name;
 } NamedIconInfoLoadCallbackInfo;
 
 typedef struct
@@ -195,12 +197,19 @@ free_category_info (IconCategoryInfo *category_info)
 }
 
 static void
-free_file_load_callback_info (FileIconInfoLoadCallbackInfo *load_info)
+free_file_info (FileIconInfoLoadCallbackInfo *load_info)
 {
     g_free (load_info->short_name);
     g_free (load_info->long_name);
 
     g_free (load_info);
+}
+
+static void
+free_named_info (NamedIconInfoLoadCallbackInfo *named_info)
+{
+    g_object_unref (named_info->pixbuf);
+    g_free (named_info);
 }
 
 void
@@ -316,6 +325,7 @@ xapp_icon_chooser_dialog_init (XAppIconChooserDialog *dialog)
 
     priv->icon_size = XAPP_ICON_SIZE_32;
     priv->categories = g_hash_table_new_full (NULL, NULL, NULL, (GDestroyNotify) free_category_info);
+
     priv->response = GTK_RESPONSE_NONE;
     priv->icon_string = NULL;
     priv->current_text = NULL;
@@ -931,9 +941,25 @@ finish_pixbuf_load_from_file (GObject      *stream,
         g_message ("%s\n", error->message);
     }
 
-    free_file_load_callback_info (callback_info);
+    free_file_info (callback_info);
     g_clear_error (&error);
     g_object_unref (stream);
+}
+
+static gboolean
+add_named_on_idle (NamedIconInfoLoadCallbackInfo *callback_info)
+{
+    GtkTreeIter iter;
+
+    gtk_list_store_append (callback_info->model, &iter);
+    gtk_list_store_set (callback_info->model, &iter,
+                        COLUMN_DISPLAY_NAME, callback_info->name,
+                        COLUMN_FULL_NAME, callback_info->name,
+                        COLUMN_PIXBUF, callback_info->pixbuf,
+                        -1);
+
+    free_named_info (callback_info);
+    return FALSE;
 }
 
 static void
@@ -941,54 +967,60 @@ finish_pixbuf_load_from_name (GObject      *info,
                               GAsyncResult *res,
                               gpointer     *user_data)
 {
+    XAppIconChooserDialog *dialog;
+    XAppIconChooserDialogPrivate *priv;
     NamedIconInfoLoadCallbackInfo *callback_info;
     GdkPixbuf                *pixbuf;
     GError                   *error = NULL;
     GtkTreeIter               iter;
 
     callback_info = (NamedIconInfoLoadCallbackInfo*) user_data;
+    priv = xapp_icon_chooser_dialog_get_instance_private (callback_info->dialog);
 
     pixbuf = gtk_icon_info_load_icon_finish (GTK_ICON_INFO (info), res, &error);
 
     if (error == NULL)
     {
-        gtk_list_store_append (callback_info->model, &iter);
-        gtk_list_store_set (callback_info->model, &iter,
-                            COLUMN_DISPLAY_NAME, callback_info->name,
-                            COLUMN_FULL_NAME, callback_info->name,
-                            COLUMN_PIXBUF, pixbuf,
-                            -1);
-
-        g_object_unref (pixbuf);
+        callback_info->pixbuf = pixbuf;
+        g_idle_add ((GSourceFunc) add_named_on_idle, callback_info);
     }
     else if (error->domain != G_IO_ERROR || error->code != G_IO_ERROR_CANCELLED)
     {
+        free_named_info (callback_info);
+
         g_message ("%s\n", error->message);
     }
 
-    g_free (callback_info);
+
     g_clear_error (&error);
     g_object_unref (info);
 }
 
 static void
-load_icons_for_category (GtkListStore *model,
-                         GList        *icons,
-                         guint         icon_size)
+load_icons_for_category (XAppIconChooserDialog *dialog,
+                         GtkListStore          *model,
+                         GList                 *icons,
+                         guint                  icon_size)
 {
+    XAppIconChooserDialogPrivate *priv;
     GtkIconTheme *theme;
 
+    priv = xapp_icon_chooser_dialog_get_instance_private (dialog);
     theme = gtk_icon_theme_get_default ();
 
     for ( ; icons; icons = icons->next)
     {
         GtkIconInfo              *info;
+        GdkPixbuf                *pixbuf;
         NamedIconInfoLoadCallbackInfo *callback_info;
+        const gchar *name = icons->data;
 
-        callback_info = g_new (NamedIconInfoLoadCallbackInfo, 1);
+        callback_info = g_new0 (NamedIconInfoLoadCallbackInfo, 1);
+        callback_info->dialog = dialog;
         callback_info->model = model;
-        callback_info->name = icons->data;
-        info = gtk_icon_theme_lookup_icon (theme, callback_info->name, icon_size, GTK_ICON_LOOKUP_FORCE_SIZE);
+        callback_info->name = name;
+
+        info = gtk_icon_theme_lookup_icon (theme, name, icon_size, GTK_ICON_LOOKUP_FORCE_SIZE);
         gtk_icon_info_load_icon_async (info, NULL, (GAsyncReadyCallback) (finish_pixbuf_load_from_name), callback_info);
     }
 }
@@ -1026,13 +1058,14 @@ on_category_selected (GtkListBox            *list_box,
 
     selected = selection->data;
     category_info = g_hash_table_lookup (priv->categories, selected);
-    if (!category_info->is_loaded)
-    {
-        load_icons_for_category (category_info->model, category_info->icons, priv->icon_size);
-        category_info->is_loaded = TRUE;
-    }
 
+    gtk_list_store_clear (GTK_LIST_STORE (category_info->model));
     gtk_icon_view_set_model (GTK_ICON_VIEW (priv->icon_view), GTK_TREE_MODEL (category_info->model));
+
+    load_icons_for_category (dialog,
+                             category_info->model,
+                             category_info->icons,
+                             priv->icon_size);
 
     new_path = gtk_tree_path_new_first ();
     gtk_icon_view_select_path (GTK_ICON_VIEW (priv->icon_view), new_path);
@@ -1111,7 +1144,7 @@ search_path (XAppIconChooserDialog *dialog,
 
                 if (stream != NULL)
                 {
-                    callback_info = g_new (FileIconInfoLoadCallbackInfo, 1);
+                    callback_info = g_new0 (FileIconInfoLoadCallbackInfo, 1);
                     callback_info->model = icon_store;
                     callback_info->short_name = g_strdup (child_name);
                     callback_info->long_name = g_strdup (child_path);
@@ -1153,9 +1186,9 @@ search_icon_name (XAppIconChooserDialog *dialog,
                   guint                  icon_size)
 {
     XAppIconChooserDialogPrivate *priv;
-    GtkIconTheme             *theme;
-    GList                    *icons;
-    GtkIconInfo              *info;
+    GtkIconTheme                 *theme;
+    GList                        *icons;
+    GtkIconInfo                  *info;
     NamedIconInfoLoadCallbackInfo *callback_info;
 
     priv = xapp_icon_chooser_dialog_get_instance_private (dialog);
@@ -1172,12 +1205,17 @@ search_icon_name (XAppIconChooserDialog *dialog,
 
     for ( ; icons; icons = icons->next)
     {
-        if (g_strrstr (icons->data, name_string)) {
-            callback_info = g_new (NamedIconInfoLoadCallbackInfo, 1);
+        if (g_strrstr (icons->data, name_string))
+        {
+            const gchar *name = icons->data;
+
+            callback_info = g_new0 (NamedIconInfoLoadCallbackInfo, 1);
+            callback_info->dialog = dialog;
             callback_info->model = icon_store;
-            callback_info->name = icons->data;
-            info = gtk_icon_theme_lookup_icon (theme, callback_info->name, icon_size, GTK_ICON_LOOKUP_FORCE_SIZE);
-            gtk_icon_info_load_icon_async (info, cancellable, (GAsyncReadyCallback) (finish_pixbuf_load_from_name), callback_info);
+            callback_info->name = name;
+
+            info = gtk_icon_theme_lookup_icon (theme, name, icon_size, GTK_ICON_LOOKUP_FORCE_SIZE);
+            gtk_icon_info_load_icon_async (info, NULL, (GAsyncReadyCallback) (finish_pixbuf_load_from_name), callback_info);
         }
     }
 }
