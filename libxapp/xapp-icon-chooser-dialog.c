@@ -136,8 +136,8 @@ G_DEFINE_TYPE_WITH_PRIVATE (XAppIconChooserDialog, xapp_icon_chooser_dialog, GTK
 static void on_category_selected (GtkListBox            *list_box,
                                  XAppIconChooserDialog *dialog);
 
-static void on_search (GtkSearchEntry        *entry,
-                       XAppIconChooserDialog *dialog);
+static void on_search_text_changed (GtkSearchEntry        *entry,
+                                    XAppIconChooserDialog *dialog);
 
 static void on_icon_view_selection_changed (GtkIconView *icon_view,
                                             gpointer     user_data);
@@ -346,7 +346,7 @@ xapp_icon_chooser_dialog_init (XAppIconChooserDialog *dialog)
     gtk_entry_set_placeholder_text (GTK_ENTRY (priv->search_bar), _("Search"));
 
     g_signal_connect (priv->search_bar, "search-changed",
-                      G_CALLBACK (on_search), dialog);
+                      G_CALLBACK (on_search_text_changed), dialog);
     g_signal_connect (priv->search_bar, "key-press-event",
                       G_CALLBACK (on_search_bar_key_pressed), dialog);
 
@@ -1190,8 +1190,8 @@ search_icon_name (XAppIconChooserDialog *dialog,
 }
 
 static void
-on_search (GtkSearchEntry        *entry,
-           XAppIconChooserDialog *dialog)
+on_search_text_changed (GtkSearchEntry        *entry,
+                        XAppIconChooserDialog *dialog)
 {
     XAppIconChooserDialogPrivate *priv;
     const gchar                  *search_text;
