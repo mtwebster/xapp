@@ -1070,6 +1070,7 @@ on_category_selected (GtkListBox            *list_box,
     new_path = gtk_tree_path_new_first ();
     gtk_icon_view_select_path (GTK_ICON_VIEW (priv->icon_view), new_path);
 
+    gtk_tree_path_free (new_path);
     g_list_free (selection);
 }
 
@@ -1329,6 +1330,8 @@ on_icon_store_icons_added (GtkTreeModel *tree_model,
 
     new_path = gtk_tree_path_new_first ();
     gtk_icon_view_select_path (GTK_ICON_VIEW (priv->icon_view), new_path);
+
+    gtk_tree_path_free (new_path);
 }
 
 static void
