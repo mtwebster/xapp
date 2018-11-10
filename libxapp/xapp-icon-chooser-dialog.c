@@ -1013,21 +1013,16 @@ on_category_selected (GtkListBox            *list_box,
         priv->cancellable = NULL;
     }
 
-    g_signal_handler_block (priv->search_bar, priv->search_changed_id);
-    gtk_entry_set_text (GTK_ENTRY (priv->search_bar), "");
-    g_signal_handler_unblock (priv->search_bar, priv->search_changed_id);
-
     selection = gtk_list_box_get_selected_rows (GTK_LIST_BOX (priv->list_box));
 
     if (!selection)
     {
-        GtkListBoxRow *row;
-
-        row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (priv->list_box), 0);
-        gtk_list_box_select_row (GTK_LIST_BOX (priv->list_box), row);
-
         return;
     }
+
+    g_signal_handler_block (priv->search_bar, priv->search_changed_id);
+    gtk_entry_set_text (GTK_ENTRY (priv->search_bar), "");
+    g_signal_handler_unblock (priv->search_bar, priv->search_changed_id);
 
     selected = selection->data;
     category_info = g_hash_table_lookup (priv->categories, selected);
@@ -1208,7 +1203,10 @@ on_search_text_changed (GtkSearchEntry        *entry,
     if (g_strcmp0 (search_text, "") == 0)
     {
         g_clear_pointer (&priv->current_text, g_free);
-        on_category_selected (GTK_LIST_BOX (priv->list_box), dialog);
+        g_clear_pointer (&priv->icon_string, g_free);
+
+        gtk_list_box_select_row (GTK_LIST_BOX (priv->list_box), NULL);
+        gtk_list_store_clear (GTK_LIST_STORE (priv->search_icon_store));
     }
     else
     if (strlen (search_text) < 2)
@@ -1220,6 +1218,7 @@ on_search_text_changed (GtkSearchEntry        *entry,
         g_free (priv->current_text);
         priv->current_text = g_strdup (search_text);
 
+        gtk_list_box_select_row (GTK_LIST_BOX (priv->list_box), NULL);
         gtk_list_store_clear (GTK_LIST_STORE (priv->search_icon_store));
         gtk_icon_view_set_model (GTK_ICON_VIEW (priv->icon_view), GTK_TREE_MODEL (priv->search_icon_store));
         if (g_strrstr (search_text, "/"))
