@@ -229,7 +229,7 @@ free_file_info (FileIconInfoLoadCallbackInfo *file_info)
 static void
 free_named_info (NamedIconInfoLoadCallbackInfo *named_info)
 {
-    // g_clear_object (&named_info->pixbuf);
+    g_clear_object (&named_info->pixbuf);
     g_free (named_info);
 }
 
@@ -1028,7 +1028,7 @@ load_next_category_chunk (gpointer user_data)
                                  callback_info->category_info,
                                  priv->icon_size);
     } 
-    
+
     free_named_info (callback_info);
 
     return G_SOURCE_REMOVE;
@@ -1049,6 +1049,7 @@ load_next_name_search_chunk (gpointer user_data)
                           priv->current_text,
                           priv->search_icon_store);
     }
+
     free_named_info (callback_info);
 
     return G_SOURCE_REMOVE;
@@ -1073,6 +1074,10 @@ add_named_entry_with_existing_pixbuf (gpointer user_data)
             {
                 g_idle_add ((GSourceFunc) load_next_category_chunk, callback_info);
             }
+            else
+            {
+                free_named_info (callback_info);
+            }
         }
     }
     /* Otherwise, it's a search result set */
@@ -1085,6 +1090,10 @@ add_named_entry_with_existing_pixbuf (gpointer user_data)
             if (callback_info->chunk_end)
             {
                 g_idle_add ((GSourceFunc) load_next_name_search_chunk, callback_info);
+            }
+            else
+            {
+                free_named_info (callback_info);
             }
             
         }
@@ -1134,6 +1143,10 @@ finish_pixbuf_load_from_name (GObject      *info,
             {
                 g_idle_add ((GSourceFunc) load_next_category_chunk, callback_info);
             }
+            else
+            {
+                free_named_info (callback_info);
+            }
         }
     }
     /* Otherwise, it's a search result set */
@@ -1146,6 +1159,10 @@ finish_pixbuf_load_from_name (GObject      *info,
             if (callback_info->chunk_end)
             {
                 g_idle_add ((GSourceFunc) load_next_name_search_chunk, callback_info);
+            }
+            else
+            {
+                free_named_info (callback_info);
             }
         }
     }
