@@ -46,6 +46,7 @@ typedef struct
     GtkWidget       *select_button;
     GtkWidget       *browse_button;
     GtkWidget       *action_area;
+    GtkWidget       *loading_bar;
     gchar           *icon_string;
     gchar           *current_text;
     gulong           search_changed_id;
@@ -396,6 +397,10 @@ xapp_icon_chooser_dialog_init (XAppIconChooserDialog *dialog)
     GtkWidget                    *main_box;
     GtkWidget                    *secondary_box;
     GtkWidget                    *toolbar;
+    GtkWidget                    *overlay;
+    GtkWidget                    *spinner;
+    GtkWidget                    *spinner_label;
+    GtkWidget                    *loading_bar_box;
     GtkToolItem                  *tool_item;
     GtkWidget                    *toolbar_box;
     GtkWidget                    *right_box;
@@ -494,9 +499,40 @@ xapp_icon_chooser_dialog_init (XAppIconChooserDialog *dialog)
     right_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     gtk_box_pack_start (GTK_BOX (secondary_box), right_box, TRUE, TRUE, 0);
 
+    overlay = gtk_overlay_new ();
+    gtk_box_pack_start (GTK_BOX (right_box), overlay, TRUE, TRUE, 0);
+
     // icon view
     scrolled_window = gtk_scrolled_window_new (NULL, NULL);
-    gtk_box_pack_start (GTK_BOX (right_box), scrolled_window, TRUE, TRUE, 0);
+    gtk_overlay_add_overlay (GTK_OVERLAY (overlay), scrolled_window);
+    gtk_widget_set_halign (scrolled_window, GTK_ALIGN_FILL);
+    gtk_widget_set_valign (scrolled_window, GTK_ALIGN_FILL);
+
+    priv->loading_bar = gtk_frame_new (NULL);
+    gtk_frame_set_shadow_type (GTK_FRAME (priv->loading_bar), GTK_SHADOW_NONE);
+
+    gtk_style_context_add_class (gtk_widget_get_style_context (priv->loading_bar),
+                                 "background");
+
+    gtk_overlay_add_overlay (GTK_OVERLAY (overlay), priv->loading_bar);
+    gtk_widget_set_halign (priv->loading_bar, GTK_ALIGN_START);
+    gtk_widget_set_valign (priv->loading_bar, GTK_ALIGN_END);
+    gtk_widget_set_no_show_all (priv->loading_bar, TRUE);
+
+    loading_bar_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_container_add (GTK_CONTAINER (priv->loading_bar), loading_bar_box);
+    g_object_set (loading_bar_box,
+                  "margin", 4,
+                  NULL);
+
+    spinner = gtk_spinner_new ();
+    gtk_spinner_start (GTK_SPINNER (spinner));
+    gtk_box_pack_start (GTK_BOX (loading_bar_box), spinner, FALSE, FALSE, 4);
+
+    spinner_label = gtk_label_new (_("Loading..."));
+    gtk_box_pack_start (GTK_BOX (loading_bar_box), spinner_label, FALSE, FALSE, 4);
+
+    gtk_widget_show_all (loading_bar_box);
 
     priv->icon_view = gtk_icon_view_new ();
     gtk_container_add(GTK_CONTAINER (scrolled_window), GTK_WIDGET (priv->icon_view));
@@ -1326,6 +1362,7 @@ load_icons_for_category (XAppIconChooserDialog *dialog,
         }
         else
         {
+            gtk_widget_hide (priv->loading_bar);
             break; // Quit the count early, we're out of data
         }
     }
@@ -1351,6 +1388,8 @@ on_category_selected (GtkListBox            *list_box,
     {
         return;
     }
+
+    gtk_widget_show (priv->loading_bar);
 
     g_signal_handler_block (priv->search_bar, priv->search_changed_id);
     gtk_entry_set_text (GTK_ENTRY (priv->search_bar), "");
@@ -1505,6 +1544,7 @@ search_path (XAppIconChooserDialog *dialog,
     if (!child_info)
     {
         g_object_unref (priv->search_file_enumerator);
+        gtk_widget_hide (priv->loading_bar);
     }
 
     g_object_unref (dir);
@@ -1584,6 +1624,8 @@ search_icon_name (XAppIconChooserDialog *dialog,
         }
         else
         {
+            gtk_widget_hide (priv->loading_bar);
+
             break; // Quit the count early, we're out of data
         }
     }
@@ -1629,6 +1671,8 @@ on_search_text_changed (GtkSearchEntry        *entry,
     {
         g_free (priv->current_text);
         priv->current_text = g_strdup (search_text);
+
+        gtk_widget_show (priv->loading_bar);
 
         gtk_list_store_clear (GTK_LIST_STORE (priv->search_icon_store));
         gtk_icon_view_set_model (GTK_ICON_VIEW (priv->icon_view), GTK_TREE_MODEL (priv->search_icon_store));
