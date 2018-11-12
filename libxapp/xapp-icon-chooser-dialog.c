@@ -1606,7 +1606,10 @@ on_search_text_changed (GtkSearchEntry        *entry,
     gtk_list_box_select_row (GTK_LIST_BOX (priv->list_box), NULL);
 
     priv->cancellable = g_cancellable_new ();
+
+#if DEBUG_REFS
     g_object_weak_ref (G_OBJECT (priv->cancellable), (GWeakNotify) on_cancellable_finalize, dialog);
+#endif
 
     search_text = gtk_entry_get_text (GTK_ENTRY (entry));
 
