@@ -1,0 +1,88 @@
+#!/usr/bin/python3
+import gi
+gi.require_version('Gtk', '3.0')
+gi.require_version('XApp', '1.0')
+from gi.repository import Gio, GLib, GObject, Gtk, XApp
+import os
+import sys
+import signal
+
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+
+DBUS_NAME = "org.x.StatusIcon"
+DBUS_PATH = "/org/x/StatusIcon"
+
+class FavoriteList(GObject.Object):
+
+    def __init__(self):
+        super(FavoriteList, self).__init__()
+
+        self.command_handled = False
+
+        self.manager = XApp.FavoritesManager.get_default()
+        self.manager.connect("changed", self.on_manager_changed)
+
+    def on_manager_changed(self, manager, data=None):
+        if not self.command_handled:
+            if len(sys.argv) == 1:
+                self.make_window()
+            else:
+                self.handle_args()
+            self.command_handled = True
+        else:
+            print("complete - exiting")
+            Gtk.main_quit()
+
+
+    def make_window(self):
+        self.window = Gtk.Window()
+        self.window.connect("destroy", self.on_window_destroy)
+
+        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
+                                margin=6,
+                                spacing=6)
+
+        self.window.add(self.main_box)
+        self.window.show_all()
+
+        favorites = self.manager.get_favorites(None)
+
+        for info in favorites:
+            label = Gtk.Label(label=info.uri)
+            label.show()
+            self.main_box.pack_start(label, False, False, 5)
+
+    def handle_args(self):
+        n_args = len(sys.argv)
+
+        if sys.argv[1] not in ("add", "delete", "move"):
+            print("invalid args - use: add|delete|move <uri> <index>")
+            Gtk.main_quit()
+
+        if sys.argv[1] == "add":
+            if n_args != 3:
+                print("invalid args - use: add <uri>")
+                Gtk.main_quit()
+
+            self.manager.add(sys.argv[2])
+        elif sys.argv[1] == "delete":
+            if n_args != 3:
+                print("invalid args - use: delete <uri>")
+                Gtk.main_quit()
+
+            self.manager.delete(sys.argv[2])
+        else:
+            if n_args != 4:
+                print("invalid args - use: move <uri> <index>")
+                Gtk.main_quit()
+
+            self.manager.move(sys.argv[2], int(sys.argv[3]))
+
+    def on_window_destroy(self, widget, data=None):
+        Gtk.main_quit()
+
+if __name__ == '__main__':
+    test = FavoriteList()
+    Gtk.main()
+    sys.exit(0)

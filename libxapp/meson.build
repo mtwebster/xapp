@@ -8,8 +8,10 @@ libdeps += dependency('gdk-pixbuf-2.0', version: '>=2.22.0', required: true)
 libdeps += dependency('cairo', required: true)
 libdeps += dependency('libgnomekbdui', required: true)
 libdeps += dependency('x11', required: true)
+libdeps += dependency('json-glib-1.0', required: true)
 
 xapp_headers = [
+    'xapp-favorites-manager.h',
     'xapp-gtk-window.h',
     'xapp-icon-chooser-button.h',
     'xapp-icon-chooser-dialog.h',
@@ -22,6 +24,7 @@ xapp_headers = [
 ]
 
 xapp_sources = [
+    'xapp-favorites-manager.c',
     'xapp-glade-catalog.c',
     'xapp-gtk-window.c',
     'xapp-icon-chooser-button.c',
