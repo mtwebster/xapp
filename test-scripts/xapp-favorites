@@ -19,7 +19,7 @@ class FavoriteList(GObject.Object):
         super(FavoriteList, self).__init__()
 
         self.command_handled = False
-
+        self.window = None
         self.manager = XApp.FavoritesManager.get_default()
         self.manager.connect("changed", self.on_manager_changed)
 
@@ -36,15 +36,19 @@ class FavoriteList(GObject.Object):
 
 
     def make_window(self):
-        self.window = Gtk.Window()
-        self.window.connect("destroy", self.on_window_destroy)
+        if not self.window:
+            self.window = Gtk.Window()
+            self.window.connect("destroy", self.on_window_destroy)
 
-        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                                margin=6,
-                                spacing=6)
+            self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
+                                    margin=6,
+                                    spacing=6)
 
-        self.window.add(self.main_box)
-        self.window.show_all()
+            self.window.add(self.main_box)
+            self.window.show_all()
+
+        for child in self.main_box.get_children():
+            self.main_box.remove(child)
 
         favorites = self.manager.get_favorites(None)
 

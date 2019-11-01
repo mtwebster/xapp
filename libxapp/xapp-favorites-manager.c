@@ -266,7 +266,6 @@ save_favorites_to_file (XAppFavoritesManager *manager)
         if (data)
         {
             XAppFavoriteInfo *info = (XAppFavoriteInfo *) data;
-            g_printerr ("%d, %s\n", info->index, info->uri);
 
             json_builder_set_member_name (builder, info->uri);
             json_builder_begin_object (builder);
