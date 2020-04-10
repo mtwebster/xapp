@@ -123,13 +123,7 @@ class XAppSNDaemon(Gtk.Application):
                 existing = None
 
             if not existing:
-                proxy = XApp.FdoSnItemProxy.new_sync(self.bus,
-                                                     Gio.DBusProxyFlags.NONE,
-                                                     bus_name,
-                                                     path,
-                                                     None)
-
-                wrapper = SnItemWrapper(proxy)
+                wrapper = SnItemWrapper(bus_name, path)
 
                 self.items[key] = wrapper
                 self.update_published_items()

@@ -20,10 +20,10 @@ from notifierItem import SnItem
 FALLBACK_ICON_SIZE = 24
 
 class SnItemWrapper(GObject.Object):
-    def __init__(self, sn_item_proxy):
+    def __init__(self, bus_name, path):
         GObject.Object.__init__(self)
 
-        self.sn_item = SnItem(sn_item_proxy)
+        self.sn_item = SnItem(bus_name, path)
 
         self.sn_item.connect("ready", lambda p: self.sn_item_ready())
         self.sn_item.connect("update-status", lambda p: self.update_status())
@@ -91,6 +91,7 @@ class SnItemWrapper(GObject.Object):
         self.sn_item.scroll(delta, o_str)
 
     def update_menu(self):
+        return
         # print("ItemIsMenu: ", self.sn_item.item_is_menu())
         menu_path = self.sn_item.menu()
 
@@ -100,7 +101,7 @@ class SnItemWrapper(GObject.Object):
             self.xapp_icon.set_secondary_menu(None)
             return
 
-        self.gtk_menu = DbusmenuGtk3.Menu.new(self.sn_item.sn_item_proxy.get_name(), menu_path)
+        self.gtk_menu = DbusmenuGtk3.Menu.new(self.sn_item.bus_name, menu_path)
 
         self.xapp_icon.set_secondary_menu(self.gtk_menu)
 

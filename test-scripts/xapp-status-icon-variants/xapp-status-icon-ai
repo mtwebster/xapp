@@ -42,7 +42,7 @@ class App(GObject.Object):
         self.indicator.set_menu(self.menu)
 
         self.indicator.connect("scroll-event", self.handle_scroll_event)
-        GLib.timeout_add_seconds(2, self.on_timeout_cb)
+        GLib.timeout_add_seconds(1, self.on_timeout_cb)
 
     def activate_window(self, item, data=None):
         w = Gtk.Window(default_width=300, default_height=130)
