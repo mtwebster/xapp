@@ -140,7 +140,9 @@ class XAppSNDaemon(Gtk.Application):
             return False
 
         watcher.complete_register_status_notifier_item(invocation)
-        watcher.emit_status_notifier_item_registered(service)
+
+        if not existing:
+            watcher.emit_status_notifier_item_registered(service)
 
         return True
 
@@ -167,7 +169,7 @@ class XAppSNDaemon(Gtk.Application):
     def name_owner_lost(self, watcher, name, old_owner):
         for key in self.items.keys():
             if key.startswith(name):
-                # print("'%s' left the bus, owned by %s" % (name, old_owner))
+                print("'%s' left the bus, owned by %s" % (name, old_owner))
                 self.remove_item(key)
                 return
 
