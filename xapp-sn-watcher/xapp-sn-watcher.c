@@ -1,8 +1,11 @@
 #include <stdlib.h>
 #include <gtk/gtk.h>
 
+#include <libxapp/xapp-status-icon.h>
+
 #include "sn-watcher-interface.h"
 #include "sn-item-interface.h"
+#include "sn-item.h"
 
 #define XAPP_TYPE_SN_WATCHER xapp_sn_watcher_get_type ()
 G_DECLARE_FINAL_TYPE (XAppSnWatcher, xapp_sn_watcher, XAPP, SN_WATCHER, GtkApplication)
@@ -165,7 +168,7 @@ create_key (const gchar  *sender,
 
     temp_key = g_strdup_printf ("%s%s", temp_bname, temp_path);
 
-    g_debug ("Key: '%s'  -  from busname '%s', path '%s'", temp_key, temp_bname, temp_path);
+    g_debug ("Key: '%s', busname '%s', path '%s'", temp_key, temp_bname, temp_path);
 
     *key = temp_key;
     *bus_name = temp_bname;
@@ -180,9 +183,7 @@ handle_register_item (SnWatcherInterface     *skeleton,
                       const gchar*            service,
                       XAppSnWatcher          *watcher)
 {
-    SnItemWrapper *wrapper;
-
-    SnItemInterfaceProxy *proxy;
+    SnItem *item;
     GError *error;
     const gchar *sender;
     g_autofree gchar *key, *bus_name, *path;
@@ -199,10 +200,11 @@ handle_register_item (SnWatcherInterface     *skeleton,
         return FALSE;
     }
 
-    proxy = g_hash_table_lookup (watcher->items, key);
+    item = g_hash_table_lookup (watcher->items, key);
 
-    if (proxy == NULL)
+    if (item == NULL)
     {
+        SnItemInterface *proxy;
         error = NULL;
 
         proxy = sn_item_interface_proxy_new_sync (watcher->connection,
@@ -221,17 +223,19 @@ handle_register_item (SnWatcherInterface     *skeleton,
             return FALSE;
         }
 
-        wrapper = sn_item_wrapper_new (proxy);
+        item = sn_item_new ((GDBusProxy *) proxy);
 
         g_hash_table_insert (watcher->items,
                              key,
-                             wrapper);
+                             item);
 
         update_published_items (watcher);
     }
 
-    sn_watcher_interface_complete_register_status_notifier_item (invocation);
-    sn_watcher_interface_emit_status_notifier_item_registered (service);
+    sn_watcher_interface_complete_register_status_notifier_item (skeleton,
+                                                                 invocation);
+    sn_watcher_interface_emit_status_notifier_item_registered (skeleton,
+                                                               service);
 
     return TRUE;
 }
@@ -268,7 +272,7 @@ export_watcher_interface (XAppSnWatcher *watcher)
 
     g_signal_connect (watcher->skeleton,
                       "handle-register-status-notifier-host",
-                      G_CALLBACK (handle_register_item),
+                      G_CALLBACK (handle_register_host),
                       watcher);
 
     return TRUE;
@@ -277,49 +281,60 @@ export_watcher_interface (XAppSnWatcher *watcher)
 static void
 continue_startup (XAppSnWatcher *watcher)
 {
+    GError *error = NULL;
 
     g_debug ("XAppSnWatcher: Trying to acquire session bus connection");
 
     watcher->connection = g_bus_get_sync (G_BUS_TYPE_SESSION,
                                           NULL,
-                                          on_session_bus_connected,
-                                          watcher);
+                                          &error);
 
+    if (error != NULL)
+    {
+        g_printerr ("no bus: %s\n", error->message);
+        // what?
+        g_error_free (error);
+
+        exit(1);
+    }
+
+    add_name_listener (watcher);
     export_watcher_interface (watcher);
 
-    watcher->owner_id = g_dbus_own_name_on_connection (watcher->connection,
-                                                       NOTIFICATION_WATCHER_NAME,
-                                                       G_DBUS_CONNECTION_FLAGS_REPLACE,
-                                                       on_name_acquired,
-                                                       on_name_lost,
-                                                       watcher,
-                                                       NULL);
+    watcher->owner_id = g_bus_own_name_on_connection (watcher->connection,
+                                                      NOTIFICATION_WATCHER_NAME,
+                                                      G_BUS_NAME_OWNER_FLAGS_REPLACE,
+                                                      on_name_acquired,
+                                                      on_name_lost,
+                                                      watcher,
+                                                      NULL);
 }
 
 static void
 watcher_startup (GApplication *application)
 {
     XAppSnWatcher *watcher = (XAppSnWatcher*) application;
-    GtkApplication *app = GTK_APPLICATION (application);
+    // GtkApplication *app = GTK_APPLICATION (application);
 
     G_APPLICATION_CLASS (xapp_sn_watcher_parent_class)->startup (application);
 
     watcher->items = g_hash_table_new (g_str_hash, g_str_equal);
 
-    add_name_listener (watcher);
-
-    if (!xapp_status_icon_any_monitors ())
+    if (xapp_status_icon_any_monitors ())
     {
         continue_startup (watcher);
     }
     else
     {
-        print("No active monitors, exiting in 30s")
+        g_printerr("No active monitors, exiting in 30s\n");
     }
+
+    g_application_hold (G_APPLICATION (watcher));
 }
 
 static gint
-watcher_command_line (GApplication *application)
+watcher_command_line (GApplication            *application,
+                      GApplicationCommandLine *command_line)
 {
  
     // def do_command_line(self, command_line):
@@ -334,14 +349,14 @@ watcher_command_line (GApplication *application)
         //         print("XApp StatusNotifierWatcher not running")
         //         exit(0)
 
-    return 0
+    return 0;
 }
 
 
 static void
-watcher_shutdown (GApplication *application)
+watcher_shutdown (XAppSnWatcher *watcher)
 {
-    XAppSnWatcher *watcher = (XAppSnWatcher *) application;
+    // XAppSnWatcher *watcher = (XAppSnWatcher *) application;
 
   // if (watcher->timeout)
   //   {
@@ -349,16 +364,16 @@ watcher_shutdown (GApplication *application)
   //     watcher->timeout = 0;
   //   }
 
-  G_APPLICATION_CLASS (xapp_sn_watcher_parent_class)->shutdown (application);
+  // G_APPLICATION_CLASS (xapp_sn_watcher_parent_class)->shutdown (application);
 }
 
 static void
-watcher_init (XAppSnWatcher *app)
+xapp_sn_watcher_init (XAppSnWatcher *app)
 {
 }
 
 static void
-watcher_class_init (XAppSnWatcherClass *class)
+xapp_sn_watcher_class_init (XAppSnWatcherClass *class)
 {
   GApplicationClass *application_class = G_APPLICATION_CLASS (class);
   GObjectClass *object_class = G_OBJECT_CLASS (class);
@@ -379,7 +394,7 @@ watcher_new (void)
 
   g_set_application_name ("xapp-sn-watcher");
 
-  watcher = g_object_new (watcher_get_type (),
+  watcher = g_object_new (xapp_sn_watcher_get_type (),
                           "application-id", "org.x.StatusNotifierWatcher",
                           "flags", G_APPLICATION_HANDLES_COMMAND_LINE,
                           "inactivity-timeout", 30000,

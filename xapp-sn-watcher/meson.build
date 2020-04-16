@@ -30,13 +30,13 @@ install_data(service_file,
 watcher_sources = [
   sn_watcher_generated,
   sn_item_generated,
-  'xapp-sn-watcher.c'
+  'xapp-sn-watcher.c',
+  'sn-item.c'
 ]
 
 watcher = executable('xapp-sn-watcher',
   watcher_sources,
   include_directories: [ top_inc ],
-  # c_args: nemo_definitions,
   dependencies: libxapp_dep,
   install_dir: libexec_path,
   install: true

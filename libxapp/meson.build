@@ -63,10 +63,11 @@ xapp_sources += xapp_statusicon_interface_sources[1]
 # because the command is evaluated prior to the files being generated.  So we need to manually
 # install the dbus header file (custom install scripts really *do* get evaluated after build,
 # during the install phase.)
-meson.add_install_script('install_generated_header.py', 'xapp-statusicon-interface.h')
+codegen = find_program(join_paths(meson.source_root(), 'meson-scripts', 'g-codegen.py'))
 
-# dbus_headers += generated_sources[0]
-# xapp_sources += generated_sources[1]
+meson.add_install_script(join_paths(meson.source_root(), 'meson-scripts', 'install_generated_header.py'),
+  'xapp-statusicon-interface.h'
+)
 
 xapp_enums = gnome.mkenums('xapp-enums',
     sources : xapp_headers,
