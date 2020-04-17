@@ -35,6 +35,8 @@ G_DEFINE_TYPE (XAppSnWatcher, xapp_sn_watcher, GTK_TYPE_APPLICATION)
 #define FDO_DBUS_PATH "/org/freedesktop/DBus"
 
 #define STATUS_ICON_MONITOR_MATCH "org.x.StatusIconMonitor"
+#define APPINDICATOR_PATH_PREFIX "/org/ayatana/NotificationItem/"
+
 
 static void watcher_shutdown (XAppSnWatcher *watcher);
 
@@ -62,6 +64,56 @@ watcher_finalize (GObject *object)
   G_OBJECT_CLASS (xapp_sn_watcher_parent_class)->finalize (object);
 }
 
+static void
+handle_name_owner_appeared (XAppSnWatcher *watcher,
+                            const gchar   *name,
+                            const gchar   *old_owner)
+{
+    if (g_str_has_prefix (name, STATUS_ICON_MONITOR_PREFIX))
+    {
+        g_printerr ("A monitor appeared on the bus\n");
+    }
+}
+
+static void
+handle_name_owner_lost (XAppSnWatcher *watcher,
+                        const gchar   *name,
+                        const gchar   *old_owner)
+{
+    GList *keys, *l;
+
+    keys = g_hash_table_get_keys (watcher->items);
+
+    for (l = keys; l != NULL; l = l->next)
+    {
+        const gchar *key = l->data;
+
+        if (g_str_has_prefix (key, name))
+        {
+            g_hash_table_remove (watcher->items, key);
+            break;
+        }
+    }
+
+    g_list_free (keys);
+
+    if (g_str_has_prefix (name, STATUS_ICON_MONITOR_PREFIX))
+    {
+        g_printerr ("Lost a monitor, checking for any more");
+
+        if (xapp_status_icon_any_monitors ())
+        {
+            g_printerr ("Still have a monitor, continuing\n");
+
+            return;
+        }
+        else
+        {
+            g_printerr ("Lost our last monitor, starting countdown\n");
+            // self.start_shutdown_timer()
+        }
+    }
+}
 
 static void
 name_owner_changed (GDBusConnection *connection,
@@ -72,10 +124,31 @@ name_owner_changed (GDBusConnection *connection,
                     GVariant        *parameters,
                     gpointer         user_data)
 {
-    // XAppSnWatcher *watcher = XAPP_SN_WATCHER (user_data);
+    XAppSnWatcher *watcher = XAPP_SN_WATCHER (user_data);
+
     g_debug("XAppSnWatcher: NameOwnerChanged signal received");
 
-    // refresh_icon (self);
+    if (g_strcmp0 (signal_name, "NameOwnerChanged") == 0)
+    {
+        gchar **args = g_variant_dup_strv (parameters, NULL);
+
+        if (!args)
+        {
+            return;
+        }
+
+        if (g_strcmp0 (args[2], "") == 0)
+        {
+            handle_name_owner_lost (watcher, args[0], args[1]);
+        }
+        else
+        {
+            handle_name_owner_appeared (watcher, args[0], args[2]);
+        }
+
+        g_strfreev (args);
+    }
+
 }
 
 static void
@@ -206,6 +279,7 @@ handle_register_item (SnWatcherInterface     *skeleton,
     {
         SnItemInterface *proxy;
         error = NULL;
+        g_debug ("Key: '%s'", key);
 
         proxy = sn_item_interface_proxy_new_sync (watcher->connection,
                                                   G_DBUS_PROXY_FLAGS_NONE,
@@ -223,10 +297,11 @@ handle_register_item (SnWatcherInterface     *skeleton,
             return FALSE;
         }
 
-        item = sn_item_new ((GDBusProxy *) proxy);
+        item = sn_item_new ((GDBusProxy *) proxy,
+                            g_str_has_prefix (path, APPINDICATOR_PATH_PREFIX));
 
         g_hash_table_insert (watcher->items,
-                             key,
+                             g_strdup (key),
                              item);
 
         update_published_items (watcher);
@@ -315,10 +390,11 @@ watcher_startup (GApplication *application)
 {
     XAppSnWatcher *watcher = (XAppSnWatcher*) application;
     // GtkApplication *app = GTK_APPLICATION (application);
-
+    g_printerr ("STARTUP wtf\n");
     G_APPLICATION_CLASS (xapp_sn_watcher_parent_class)->startup (application);
 
-    watcher->items = g_hash_table_new (g_str_hash, g_str_equal);
+    watcher->items = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                            g_free, g_object_unref);
 
     if (xapp_status_icon_any_monitors ())
     {

@@ -16,7 +16,8 @@ struct _SnItem
 {
     GObject parent_instance;
 
-    GDBusProxy *proxy; // SnItemProxy
+    GDBusProxy *sn_item_proxy; // SnItemProxy
+    GDBusProxy *prop_proxy; // dbus properties (we can't trust SnItemProxy)
 
     GtkWidget *menu;
     XAppStatusIcon *status_icon;
@@ -26,9 +27,11 @@ struct _SnItem
     gchar *png_path;
 
     gint current_icon_id;
+
+    gboolean is_ai;
 };
 
-SnItem *sn_item_new (GDBusProxy *item_proxy);
+SnItem *sn_item_new (GDBusProxy *sn_item_proxy, gboolean is_ai);
 
 G_END_DECLS
 

@@ -27,6 +27,8 @@ install_data(service_file,
   install_dir: dbus_services_dir
 )
 
+dbusmenu = dependency('dbusmenu-gtk3-0.4', required: true)
+
 watcher_sources = [
   sn_watcher_generated,
   sn_item_generated,
@@ -37,7 +39,7 @@ watcher_sources = [
 watcher = executable('xapp-sn-watcher',
   watcher_sources,
   include_directories: [ top_inc ],
-  dependencies: libxapp_dep,
+  dependencies: [libxapp_dep, dbusmenu],
   install_dir: libexec_path,
   install: true
 )

@@ -140,7 +140,9 @@ class XAppSNDaemon(Gtk.Application):
             return False
 
         watcher.complete_register_status_notifier_item(invocation)
-        watcher.emit_status_notifier_item_registered(service)
+
+        if not existing:
+            watcher.emit_status_notifier_item_registered(service)
 
         return True
 
