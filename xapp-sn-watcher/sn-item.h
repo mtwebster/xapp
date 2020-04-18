@@ -12,25 +12,6 @@ G_BEGIN_DECLS
 
 G_DECLARE_FINAL_TYPE (SnItem, sn_item, SN, ITEM, GObject)
 
-struct _SnItem
-{
-    GObject parent_instance;
-
-    GDBusProxy *sn_item_proxy; // SnItemProxy
-    GDBusProxy *prop_proxy; // dbus properties (we can't trust SnItemProxy)
-
-    GtkWidget *menu;
-    XAppStatusIcon *status_icon;
-
-    gchar *status;
-    gchar *last_png_path;
-    gchar *png_path;
-
-    gint current_icon_id;
-
-    gboolean is_ai;
-};
-
 SnItem *sn_item_new (GDBusProxy *sn_item_proxy, gboolean is_ai);
 
 G_END_DECLS
