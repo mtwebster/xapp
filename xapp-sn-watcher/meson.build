@@ -28,6 +28,7 @@ install_data(service_file,
 )
 
 dbusmenu = dependency('dbusmenu-gtk3-0.4', required: true)
+cairo = dependency('cairo-gobject', required: true)
 
 watcher_sources = [
   sn_watcher_generated,
@@ -39,7 +40,7 @@ watcher_sources = [
 watcher = executable('xapp-sn-watcher',
   watcher_sources,
   include_directories: [ top_inc ],
-  dependencies: [libxapp_dep, dbusmenu],
+  dependencies: [libxapp_dep, dbusmenu, cairo],
   install_dir: libexec_path,
   install: true
 )

@@ -9,10 +9,13 @@
 #include <unistd.h>
 
 #include <gtk/gtk.h>
-
+#include <cairo-gobject.h>
 #include <libxapp/xapp-status-icon.h>
 #include <libdbusmenu-gtk/menu.h>
+
 #include "sn-item.h"
+
+#define FALLBACK_ICON_SIZE 24
 
 typedef enum
 {
@@ -80,6 +83,14 @@ sn_item_class_init (SnItemClass *klass)
 
 }
 
+static gint
+get_icon_id (SnItem *item)
+{
+    item->current_icon_id = (!item->current_icon_id);
+
+    return item->current_icon_id;
+}
+
 static GVariant *
 get_property (SnItem      *item,
               const gchar *prop_name)
@@ -99,6 +110,7 @@ get_property (SnItem      *item,
 
     if (error != NULL)
     {
+        g_error_free (error);
         return NULL;
     }
 
@@ -109,6 +121,22 @@ get_property (SnItem      *item,
     g_variant_unref (var);
 
     return result;
+}
+
+static GVariant *
+get_pixmap_property (SnItem               *item,
+                     const gchar          *name)
+{
+    GVariant *var_result = NULL;
+
+    var_result = get_property (item, name);
+
+    if (var_result == NULL)
+    {
+        return NULL;
+    }
+
+    return var_result;
 }
 
 static gchar *
@@ -129,13 +157,205 @@ get_string_property (SnItem               *item,
 
     g_variant_unref (var_result);
 
+    if (g_strcmp0 (result, "") == 0)
+    {
+        g_clear_pointer (&result, g_free);
+    }
     return result;
+}
+
+static cairo_surface_t *
+surface_from_pixmap_data (gint          width,
+                          gint          height,
+                          GBytes       *bytes)
+{
+    cairo_surface_t *surface;
+    GdkPixbuf *pixbuf;
+    gint rowstride, i;
+    guchar *copy;
+    guchar alpha;
+    gsize size;
+
+    const guchar *data = g_bytes_get_data (bytes, &size);
+    g_printerr ("%lu 111just beforebefore %s\n",size, data);
+
+    copy = g_memdup (data, size);
+    surface = NULL;
+
+    rowstride = width * 4;
+    g_printerr ("%d, %d\n", width, height);
+    i = 0;
+    g_printerr ("just beforebefore %s\n", copy);
+
+    while (i < 4 * width * height)
+    {
+        alpha       = copy[i    ];
+        copy[i    ] = copy[i + 1];
+        copy[i + 1] = copy[i + 2];
+        copy[i + 2] = copy[i + 3];
+        copy[i + 3] = alpha;
+        i += 4;
+    }
+    g_printerr ("just before %s\n", copy);
+    pixbuf = gdk_pixbuf_new_from_data (copy,
+                                       GDK_COLORSPACE_RGB,
+                                       TRUE, 8,
+                                       width, height,
+                                       rowstride,
+                                       (GdkPixbufDestroyNotify) g_free,
+                                       NULL);
+
+    if (pixbuf)
+    {g_printerr ("PIXBUF\n");
+        GdkScreen *screen;
+        GValue value = G_VALUE_INIT;
+        gint scale = 1;
+
+        g_value_init (&value, G_TYPE_INT);
+
+        screen = gdk_screen_get_default ();
+        if (gdk_screen_get_setting (screen, "gdk-window-scaling-factor", &value))
+        {
+            scale = g_value_get_int (&value);
+        }
+
+        surface = gdk_cairo_surface_create_from_pixbuf (pixbuf, scale, NULL);
+
+        g_object_unref (pixbuf);
+
+        return surface;
+    }
+}
+
+static gboolean
+process_pixmaps (SnItem    *item,
+                 GVariant  *pixmaps,
+                 gchar    **image_path)
+{
+    GVariantIter iter;
+    cairo_surface_t *surface;
+    gint width, height, pref_icon_size;
+    gint largest_width, largest_height;
+    GVariant *byte_array_var;
+    GBytes *best_image_bytes = NULL;
+
+    pref_icon_size = xapp_status_icon_get_icon_size (item->status_icon);
+
+    if (pref_icon_size == 0)
+    {
+        pref_icon_size = FALLBACK_ICON_SIZE;
+    }
+
+    largest_width = largest_height = 0;
+
+    g_variant_iter_init (&iter, pixmaps);
+    // g_variant_get (pixmaps, "a(iiay)", &iter);
+
+gsize getsize;
+guchar *t;
+    while (g_variant_iter_loop (&iter, "(ii@ay)", &width, &height, &byte_array_var))
+    {
+        if (width > 0 & height > 0 &&
+            ((width * height) > (largest_width * largest_height)))
+        {
+            gsize data_size;
+
+            largest_width = width;
+            largest_height = height;
+
+            data_size = g_variant_get_size (byte_array_var);
+
+            if (best_image_bytes != NULL)
+            {
+                g_clear_pointer (&best_image_bytes, g_bytes_unref);
+            }
+
+            best_image_bytes = g_variant_get_data_as_bytes (byte_array_var);
+
+t  = g_bytes_get_data (best_image_bytes, &getsize);           
+            g_printerr ("%s size: %lu (byteS: %lu) - '%s'\n",g_variant_get_type_string (byte_array_var), g_bytes_get_size (best_image_bytes),getsize, (gchar *) g_bytes_get_data (best_image_bytes, NULL));
+
+            // best_image_data = g_memdup (g_variant_get_data (byte_array_var), data_size);
+        }
+    }
+t  = g_bytes_get_data (best_image_bytes, &getsize);           
+g_printerr ("aaaaaaaaaaaaasize: %lu (byteS: %lu) - '%s'\n", g_bytes_get_size (best_image_bytes),getsize, (gchar *) g_bytes_get_data (best_image_bytes, NULL));
+
+    // g_variant_iter_free (iter);
+
+
+    if (best_image_bytes == NULL)
+    {
+        g_warning ("No valid pixmaps found.");
+        return FALSE;
+    }
+
+    surface = surface_from_pixmap_data (largest_width, largest_height, best_image_bytes);
+    // g_free (best_image_data);
+
+    if (cairo_surface_status (surface) != CAIRO_STATUS_SUCCESS)
+    {
+        cairo_surface_destroy (surface);
+        return FALSE;
+    }
+
+    item->last_png_path = item->png_path;
+
+    gchar *filename = g_strdup_printf ("xapp-tmp-%p-%d.png", item, get_icon_id (item));
+    gchar *save_filename = g_build_path ("/", g_get_tmp_dir (), filename, NULL);
+    g_free (filename);
+
+    cairo_status_t status = CAIRO_STATUS_SUCCESS;
+    status = cairo_surface_write_to_png (surface, save_filename);
+
+    if (status != CAIRO_STATUS_SUCCESS)
+    {
+        g_warning ("Failed to save png of status icon");
+        g_free (image_path);
+        cairo_surface_destroy (surface);
+    }
+
+    *image_path = save_filename;
+    cairo_surface_destroy (surface);
+
+    return TRUE;
 }
 
 static void
 set_icon_from_pixmap (SnItem *item)
 {
+    GVariant *pixmaps;
+    gchar *image_path;
 
+    if (item->status == STATUS_ACTIVE)
+    {
+        pixmaps = get_pixmap_property (item, "IconPixmap");
+    }
+    else
+    if (item->status == STATUS_NEEDS_ATTENTION)
+    {
+        pixmaps = get_pixmap_property (item, "AttentionIconPixmap");
+
+        if (!pixmaps)
+        {
+            pixmaps = get_pixmap_property (item, "IconPixmap");
+        }
+    }
+
+    if (!pixmaps)
+    {
+        xapp_status_icon_set_icon_name (item->status_icon, "image-missing");
+        g_warning ("No pixmaps to use");
+        return;
+    }
+
+    if (process_pixmaps (item, pixmaps, &image_path))
+    {
+        xapp_status_icon_set_icon_name (item->status_icon, image_path);
+        g_free (image_path);
+    }
+
+    g_variant_unref (pixmaps);
 }
 
 static gchar *
@@ -198,7 +418,8 @@ set_icon_name_or_path (SnItem *item,
             name_to_use = icon_name;
         }
     }
-    else if (item->status == STATUS_NEEDS_ATTENTION)
+    else
+    if (item->status == STATUS_NEEDS_ATTENTION)
     {
         if (att_icon_name)
         {
@@ -233,10 +454,7 @@ update_icon (SnItem *item)
 
     if (icon_name || att_icon_name || olay_icon_name)
     {
-        if (g_strcmp0 (icon_theme_path, "") == 0)
-        {
-            g_clear_pointer (&icon_theme_path, g_free);
-        }
+        g_printerr ("icon name '%s' '%s' '%s'\n", icon_name, att_icon_name, olay_icon_name);
 
         set_icon_name_or_path (item,
                                icon_theme_path,
@@ -246,6 +464,7 @@ update_icon (SnItem *item)
     }
     else
     {
+        g_printerr ("pixmap...\n");
         set_icon_from_pixmap (item);
     }
 
@@ -323,6 +542,8 @@ update_status (SnItem *item)
         item->status = STATUS_ACTIVE;
         xapp_status_icon_set_visible (item->status_icon, TRUE);
     }
+
+    g_free (status);
 
     if (old_status != item->status)
     {
