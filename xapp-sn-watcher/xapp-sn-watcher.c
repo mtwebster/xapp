@@ -2,6 +2,7 @@
 #include <gtk/gtk.h>
 
 #include <libxapp/xapp-status-icon.h>
+#include <glib-unix.h>
 
 #include "sn-watcher-interface.h"
 #include "sn-item-interface.h"
@@ -21,9 +22,9 @@ struct _XAppSnWatcher
     guint listener_id;
 
     GHashTable *items;
-};
 
-// typedef GtkApplicationClass XAppSnWatcherClass;
+    gboolean shutdown_pending;
+};
 
 G_DEFINE_TYPE (XAppSnWatcher, xapp_sn_watcher, GTK_TYPE_APPLICATION)
 
@@ -37,33 +38,6 @@ G_DEFINE_TYPE (XAppSnWatcher, xapp_sn_watcher, GTK_TYPE_APPLICATION)
 #define STATUS_ICON_MONITOR_MATCH "org.x.StatusIconMonitor"
 #define APPINDICATOR_PATH_PREFIX "/org/ayatana/NotificationItem/"
 
-
-static void watcher_shutdown (XAppSnWatcher *watcher);
-
-static void
-watcher_activate (GApplication *application)
-{
-  // new_window (application, NULL);
-}
-
-static void
-watcher_open (GApplication  *application,
-                GFile        **files,
-                gint           n_files,
-                const gchar   *hint)
-{
-  // gint i;
-
-  // for (i = 0; i < n_files; i++)
-  //   new_window (application, files[i]);
-}
-
-static void
-watcher_finalize (GObject *object)
-{
-  G_OBJECT_CLASS (xapp_sn_watcher_parent_class)->finalize (object);
-}
-
 static void
 handle_name_owner_appeared (XAppSnWatcher *watcher,
                             const gchar   *name,
@@ -71,7 +45,13 @@ handle_name_owner_appeared (XAppSnWatcher *watcher,
 {
     if (g_str_has_prefix (name, STATUS_ICON_MONITOR_PREFIX))
     {
-        g_printerr ("A monitor appeared on the bus\n");
+        if (watcher->shutdown_pending)
+        {
+            g_debug ("A monitor appeared on the bus, cancelling shutdown\n");
+
+            watcher->shutdown_pending = FALSE;
+            g_application_hold (G_APPLICATION (watcher));
+        }
     }
 }
 
@@ -83,13 +63,14 @@ handle_name_owner_lost (XAppSnWatcher *watcher,
     GList *keys, *l;
 
     keys = g_hash_table_get_keys (watcher->items);
-
+    g_printerr ("owner lost\n");
     for (l = keys; l != NULL; l = l->next)
     {
         const gchar *key = l->data;
 
         if (g_str_has_prefix (key, name))
         {
+            g_debug ("Client %s has exited, removing status icon", key);
             g_hash_table_remove (watcher->items, key);
             break;
         }
@@ -99,18 +80,19 @@ handle_name_owner_lost (XAppSnWatcher *watcher,
 
     if (g_str_has_prefix (name, STATUS_ICON_MONITOR_PREFIX))
     {
-        g_printerr ("Lost a monitor, checking for any more");
+        g_debug ("Lost a monitor, checking for any more");
 
         if (xapp_status_icon_any_monitors ())
         {
-            g_printerr ("Still have a monitor, continuing\n");
+            g_debug ("Still have a monitor, continuing");
 
             return;
         }
         else
         {
-            g_printerr ("Lost our last monitor, starting countdown\n");
-            // self.start_shutdown_timer()
+            g_debug ("Lost our last monitor, starting countdown\n");
+
+            g_application_release (G_APPLICATION (watcher));
         }
     }
 }
@@ -175,9 +157,8 @@ on_name_lost (GDBusConnection *connection,
 {
     XAppSnWatcher *watcher = XAPP_SN_WATCHER (user_data);
 
-    g_warning ("XAppSnWatcher: Lost name, exiting.");
-
-    watcher_shutdown (watcher);
+    g_debug ("Lost StatusNotifierWatcher name (maybe something replaced us), exiting immediately");
+    g_application_quit (G_APPLICATION (watcher));
 }
 
 static void
@@ -185,9 +166,7 @@ on_name_acquired (GDBusConnection *connection,
                   const gchar     *name,
                   gpointer         user_data)
 {
-    // XAppSnWatcher *watcher = XAPP_SN_WATCHER (user_data);
-
-    g_debug ("XAppSnWatcher: name acquired on dbus.");
+    g_debug ("Name acquired on dbus");
 }
 
 static gboolean
@@ -204,8 +183,32 @@ handle_register_host (SnWatcherInterface     *skeleton,
 }
 
 static void
+populate_published_list (const gchar *key,
+                         gpointer     item,
+                         GPtrArray   *array)
+{
+    g_ptr_array_add (array, g_strdup (key));
+}
+
+static void
 update_published_items (XAppSnWatcher *watcher)
 {
+    GPtrArray *array;
+    gpointer as;
+
+    array = g_ptr_array_new ();
+
+    g_hash_table_foreach (watcher->items, (GHFunc) populate_published_list, array);
+    g_ptr_array_add (array, NULL);
+
+    as = g_ptr_array_free (array, FALSE);
+
+    sn_watcher_interface_set_registered_status_notifier_items (watcher->skeleton,
+                                                               (const gchar * const *) as);
+
+    g_strfreev ((gchar **) as);
+
+    g_dbus_interface_skeleton_flush (G_DBUS_INTERFACE_SKELETON (watcher->skeleton));
 }
 
 static gboolean
@@ -290,7 +293,7 @@ handle_register_item (SnWatcherInterface     *skeleton,
 
         if (error != NULL)
         {
-            g_warning ("Could not create new status notifier proxy item for item at %s: %s", bus_name, error->message);
+            g_debug ("Could not create new status notifier proxy item for item at %s: %s", bus_name, error->message);
 
             g_dbus_method_invocation_return_gerror (invocation, error);
 
@@ -305,12 +308,13 @@ handle_register_item (SnWatcherInterface     *skeleton,
                              item);
 
         update_published_items (watcher);
+
+        sn_watcher_interface_emit_status_notifier_item_registered (skeleton,
+                                                                   service);
     }
 
     sn_watcher_interface_complete_register_status_notifier_item (skeleton,
                                                                  invocation);
-    sn_watcher_interface_emit_status_notifier_item_registered (skeleton,
-                                                               service);
 
     return TRUE;
 }
@@ -353,12 +357,21 @@ export_watcher_interface (XAppSnWatcher *watcher)
     return TRUE;
 }
 
+static gboolean
+on_interrupt (XAppSnWatcher *watcher)
+{
+    g_debug ("SIGINT - shutting down immediately");
+
+    g_application_quit (G_APPLICATION (watcher));
+    return FALSE;
+}
+
 static void
 continue_startup (XAppSnWatcher *watcher)
 {
     GError *error = NULL;
 
-    g_debug ("XAppSnWatcher: Trying to acquire session bus connection");
+    g_debug ("Trying to acquire session bus connection");
 
     watcher->connection = g_bus_get_sync (G_BUS_TYPE_SESSION,
                                           NULL,
@@ -366,12 +379,14 @@ continue_startup (XAppSnWatcher *watcher)
 
     if (error != NULL)
     {
-        g_printerr ("no bus: %s\n", error->message);
-        // what?
+        g_critical ("Could not open connection, exiting: %s\n", error->message);
         g_error_free (error);
 
-        exit(1);
+        g_application_quit (G_APPLICATION (watcher));
     }
+
+    g_unix_signal_add (SIGINT, (GSourceFunc) on_interrupt, watcher);
+    g_application_hold (G_APPLICATION (watcher));
 
     add_name_listener (watcher);
     export_watcher_interface (watcher);
@@ -389,11 +404,15 @@ static void
 watcher_startup (GApplication *application)
 {
     XAppSnWatcher *watcher = (XAppSnWatcher*) application;
-    // GtkApplication *app = GTK_APPLICATION (application);
     G_APPLICATION_CLASS (xapp_sn_watcher_parent_class)->startup (application);
 
     watcher->items = g_hash_table_new_full (g_str_hash, g_str_equal,
                                             g_free, g_object_unref);
+
+    /* This buys us 30 seconds (gapp timeout) - we'll either be re-held immediately
+     * because there's a monitor or exit after the 30 seconds. */
+    g_application_hold (application);
+    g_application_release (application);
 
     if (xapp_status_icon_any_monitors ())
     {
@@ -402,9 +421,8 @@ watcher_startup (GApplication *application)
     else
     {
         g_printerr("No active monitors, exiting in 30s\n");
+        watcher->shutdown_pending = TRUE;
     }
-
-    g_application_hold (G_APPLICATION (watcher));
 }
 
 static gint
@@ -427,19 +445,52 @@ watcher_command_line (GApplication            *application,
     return 0;
 }
 
+static void
+watcher_activate (GApplication *application)
+{
+}
 
 static void
-watcher_shutdown (XAppSnWatcher *watcher)
+watcher_open (GApplication  *application,
+                GFile        **files,
+                gint           n_files,
+                const gchar   *hint)
 {
-    // XAppSnWatcher *watcher = (XAppSnWatcher *) application;
+}
 
-  // if (watcher->timeout)
-  //   {
-  //     g_source_remove (watcher->timeout);
-  //     watcher->timeout = 0;
-  //   }
+static void
+watcher_finalize (GObject *object)
+{
+  G_OBJECT_CLASS (xapp_sn_watcher_parent_class)->finalize (object);
+}
 
-  // G_APPLICATION_CLASS (xapp_sn_watcher_parent_class)->shutdown (application);
+static void
+watcher_shutdown (GApplication *application)
+{
+    XAppSnWatcher *watcher = (XAppSnWatcher *) application;
+
+    if (watcher->listener_id > 0)
+    {
+        g_dbus_connection_signal_unsubscribe (watcher->connection, watcher->listener_id);
+        watcher->listener_id = 0;
+    }
+
+    g_clear_pointer (&watcher->items, g_hash_table_unref);
+
+    if (watcher->owner_id > 0)
+    {
+        g_bus_unown_name (watcher->owner_id);
+    }
+
+    if (watcher->skeleton != NULL)
+    {
+        g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (watcher->skeleton));
+        g_clear_object (&watcher->skeleton);
+    }
+
+    g_clear_object (&watcher->connection);
+
+    G_APPLICATION_CLASS (xapp_sn_watcher_parent_class)->shutdown (application);
 }
 
 static void
@@ -454,7 +505,7 @@ xapp_sn_watcher_class_init (XAppSnWatcherClass *class)
   GObjectClass *object_class = G_OBJECT_CLASS (class);
 
   application_class->startup = watcher_startup;
-  // application_class->shutdown = watcher_shutdown;
+  application_class->shutdown = watcher_shutdown;
   application_class->activate = watcher_activate;
   application_class->open = watcher_open;
   application_class->command_line = watcher_command_line;

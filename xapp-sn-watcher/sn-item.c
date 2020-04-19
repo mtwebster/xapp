@@ -14,7 +14,6 @@
 #include <libxapp/xapp-status-icon.h>
 #include <libdbusmenu-gtk/menu.h>
 
-
 #include "sn-item.h"
 
 #define FALLBACK_ICON_SIZE 24
@@ -103,6 +102,25 @@ sn_item_class_init (SnItemClass *klass)
 
 }
 
+static guint
+lookup_ui_scale (void)
+{
+    GdkScreen *screen;
+    GValue value = G_VALUE_INIT;
+    guint scale = 1;
+
+    g_value_init (&value, G_TYPE_UINT);
+
+    screen = gdk_screen_get_default ();
+
+    if (gdk_screen_get_setting (screen, "gdk-window-scaling-factor", &value))
+    {
+        scale = g_value_get_uint (&value);
+    }
+
+    return scale;
+}
+
 static gint
 get_icon_id (SnItem *item)
 {
@@ -111,14 +129,29 @@ get_icon_id (SnItem *item)
     return item->current_icon_id;
 }
 
+static gint
+get_icon_size (SnItem *item)
+{
+    gint size = 0;
+
+    size = xapp_status_icon_get_icon_size (item->status_icon);
+
+    if (size > 0)
+    {
+        return size;
+    }
+
+    return FALLBACK_ICON_SIZE;
+}
+
 static GVariant *
 get_property (SnItem      *item,
               const gchar *prop_name)
 {
-    GVariant *var, *box, *result;
+    GVariant *res, *var;
     GError *error = NULL;
 
-    box = g_dbus_proxy_call_sync (item->prop_proxy,
+    res = g_dbus_proxy_call_sync (item->prop_proxy,
                                   "Get",
                                   g_variant_new ("(ss)",
                                                  g_dbus_proxy_get_interface_name (item->sn_item_proxy),
@@ -134,48 +167,44 @@ get_property (SnItem      *item,
         return NULL;
     }
 
-    var = g_variant_get_child_value (box, 0);
-    result = g_variant_get_variant (var);
+    g_variant_get (res, "(v)", &var);
+    g_variant_unref (res);
 
-    g_variant_unref (box);
-    g_variant_unref (var);
-
-    return result;
+    return var;
 }
 
 static GVariant *
 get_pixmap_property (SnItem               *item,
                      const gchar          *name)
 {
-    GVariant *var_result = NULL;
+    GVariant *var = NULL;
 
-    var_result = get_property (item, name);
+    var = get_property (item, name);
 
-    if (var_result == NULL)
+    if (var == NULL)
     {
         return NULL;
     }
 
-    return var_result;
+    return var;
 }
 
 static gchar *
 get_string_property (SnItem               *item,
                      const gchar          *name)
 {
-    GVariant *var_result = NULL;
+    GVariant *var = NULL;
     gchar *result = NULL;
 
-    var_result = get_property (item, name);
+    var = get_property (item, name);
 
-    if (var_result == NULL)
+    if (var == NULL)
     {
         return NULL;
     }
 
-    result = g_variant_dup_string (var_result, NULL);
-
-    g_variant_unref (var_result);
+    result = g_variant_dup_string (var, NULL);
+    g_variant_unref (var);
 
     if (g_strcmp0 (result, "") == 0)
     {
@@ -225,18 +254,7 @@ surface_from_pixmap_data (gint          width,
 
     if (pixbuf)
     {
-        GdkScreen *screen;
-        GValue value = G_VALUE_INIT;
-        gint scale = 1;
-
-        g_value_init (&value, G_TYPE_INT);
-
-        screen = gdk_screen_get_default ();
-
-        if (gdk_screen_get_setting (screen, "gdk-window-scaling-factor", &value))
-        {
-            scale = g_value_get_int (&value);
-        }
+        guint scale = lookup_ui_scale ();
 
         surface = gdk_cairo_surface_create_from_pixbuf (pixbuf, scale, NULL);
         g_object_unref (pixbuf);
@@ -252,17 +270,10 @@ process_pixmaps (SnItem    *item,
 {
     GVariantIter iter;
     cairo_surface_t *surface;
-    gint width, height, pref_icon_size;
+    gint width, height;
     gint largest_width, largest_height;
     GVariant *byte_array_var;
     GBytes *best_image_bytes = NULL;
-
-    pref_icon_size = xapp_status_icon_get_icon_size (item->status_icon);
-
-    if (pref_icon_size == 0)
-    {
-        pref_icon_size = FALLBACK_ICON_SIZE;
-    }
 
     largest_width = largest_height = 0;
 
@@ -360,16 +371,51 @@ set_icon_from_pixmap (SnItem *item)
 }
 
 static gchar *
-construct_filename (const gchar *icon_theme_path,
-                    const gchar *icon_name,
-                    const gchar *extension)
+get_icon_filename_from_theme (SnItem *item,
+                              const gchar *theme_path,
+                              const gchar *icon_name)
 {
-    gchar *basename = g_strdup_printf ("%s.%s", icon_name, extension);
-    gchar *full_path = g_build_path ("/", icon_theme_path, basename, NULL);
+    GtkIconInfo *info;
+    gchar *filename;
+    const gchar *array[2];
 
-    g_free (basename);
+    array[0] = icon_name;
+    array[1] = NULL;
 
-    return full_path;
+    // We have a theme path, but try the system theme first
+    GtkIconTheme *theme = gtk_icon_theme_get_default ();
+
+    info = gtk_icon_theme_choose_icon_for_scale (theme,
+                                                 array,
+                                                 get_icon_size (item),
+                                                 lookup_ui_scale (),
+                                                 GTK_ICON_LOOKUP_FORCE_SVG | GTK_ICON_LOOKUP_FORCE_SYMBOLIC);
+
+    if (info == NULL)
+    {
+        // Make a temp theme based off of the provided path
+        GtkIconTheme *theme = gtk_icon_theme_new ();
+
+        gtk_icon_theme_prepend_search_path (theme, theme_path);
+
+        info = gtk_icon_theme_choose_icon_for_scale (theme,
+                                                     array,
+                                                     get_icon_size (item),
+                                                     lookup_ui_scale (),
+                                                     GTK_ICON_LOOKUP_FORCE_SVG | GTK_ICON_LOOKUP_FORCE_SYMBOLIC);
+
+        g_object_unref (theme);
+    }
+
+    if (info == NULL)
+    {
+        return NULL;
+    }
+
+    filename = g_strdup (gtk_icon_info_get_filename(info));
+    g_object_unref (info);
+
+    return filename;
 }
 
 static void
@@ -383,23 +429,17 @@ process_icon_name (SnItem *item,
     }
     else
     {
-        gchar *filename = construct_filename (icon_theme_path, icon_name, "png");
+        gchar *filename = get_icon_filename_from_theme (item, icon_theme_path, icon_name);
 
-        if (!g_file_test (filename, G_FILE_TEST_EXISTS))
+        if (filename != NULL)
         {
+            xapp_status_icon_set_icon_name (item->status_icon, filename);
             g_free (filename);
-
-            filename = construct_filename (icon_theme_path, icon_name, "svg");
-
-            if (!g_file_test (filename, G_FILE_TEST_EXISTS))
-            {
-                g_warning ("No valid images found at theme path: %s (icon name: %s)",
-                           icon_theme_path, icon_name);
-            }
         }
-
-        xapp_status_icon_set_icon_name (item->status_icon, filename);
-        g_free (filename);
+        else
+        {
+            xapp_status_icon_set_icon_name (item->status_icon, "image-missing");
+        }
     }
 }
 
@@ -488,7 +528,7 @@ update_menu (SnItem *item)
     }
 
     item->menu = GTK_WIDGET (dbusmenu_gtkmenu_new ((gchar *) g_dbus_proxy_get_name (item->sn_item_proxy), menu_path));
-    // g_object_ref_sink (item->menu);
+    g_object_ref_sink (item->menu);
 
     xapp_status_icon_set_secondary_menu (item->status_icon, GTK_MENU (item->menu));
 
@@ -594,6 +634,7 @@ property_proxy_acquired (GObject      *source,
 {
     SnItem *item = SN_ITEM (user_data);
     GError *error = NULL;
+    gchar *name;
 
     item->prop_proxy = g_dbus_proxy_new_finish (res, &error);
 
@@ -609,6 +650,12 @@ property_proxy_acquired (GObject      *source,
                       G_CALLBACK (sn_signal_received),
                       item);
 
+    item->status_icon = xapp_status_icon_new ();
+
+    name = get_string_property (item, "Title");
+    xapp_status_icon_set_name (item->status_icon, name);
+    g_free (name);
+
     update_status (item);
     update_menu (item);
     update_tooltip (item);
@@ -618,8 +665,6 @@ property_proxy_acquired (GObject      *source,
 static void
 initialize_item (SnItem *item)
 {
-    item->status_icon = xapp_status_icon_new ();
-
     g_dbus_proxy_new (g_dbus_proxy_get_connection (item->sn_item_proxy),
                       G_DBUS_PROXY_FLAGS_DO_NOT_LOAD_PROPERTIES,
                       NULL,
