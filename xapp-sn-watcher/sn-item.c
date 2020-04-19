@@ -8,10 +8,12 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <glib/gstdio.h>
 #include <gtk/gtk.h>
 #include <cairo-gobject.h>
 #include <libxapp/xapp-status-icon.h>
 #include <libdbusmenu-gtk/menu.h>
+
 
 #include "sn-item.h"
 
@@ -58,11 +60,29 @@ sn_item_init (SnItem *self)
 static void
 sn_item_dispose (GObject *object)
 {
-    // SnItem *item = SN_ITEM (object);
-
+    SnItem *item = SN_ITEM (object);
     g_debug ("SnItem dispose (%p)", object);
 
-     G_OBJECT_CLASS (sn_item_parent_class)->dispose (object);
+    if (item->png_path != NULL)
+    {
+        g_unlink (item->png_path);
+        g_free (item->png_path);
+        item->png_path = NULL;
+    }
+
+    if (item->last_png_path != NULL)
+    {
+        g_unlink (item->last_png_path);
+        g_free (item->last_png_path);
+        item->last_png_path = NULL;
+    }
+
+    g_clear_object (&item->status_icon);
+    g_clear_object (&item->menu);
+    g_clear_object (&item->prop_proxy);
+    g_clear_object (&item->sn_item_proxy);
+
+    G_OBJECT_CLASS (sn_item_parent_class)->dispose (object);
 }
 
 static void
@@ -161,6 +181,7 @@ get_string_property (SnItem               *item,
     {
         g_clear_pointer (&result, g_free);
     }
+
     return result;
 }
 
@@ -172,20 +193,17 @@ surface_from_pixmap_data (gint          width,
     cairo_surface_t *surface;
     GdkPixbuf *pixbuf;
     gint rowstride, i;
+    gsize size;
+    gconstpointer data;
     guchar *copy;
     guchar alpha;
-    gsize size;
 
-    const guchar *data = g_bytes_get_data (bytes, &size);
-    g_printerr ("%lu 111just beforebefore %s\n",size, data);
+    data = g_bytes_get_data (bytes, &size);
+    copy = g_memdup ((guchar *) data, size);
 
-    copy = g_memdup (data, size);
     surface = NULL;
-
     rowstride = width * 4;
-    g_printerr ("%d, %d\n", width, height);
     i = 0;
-    g_printerr ("just beforebefore %s\n", copy);
 
     while (i < 4 * width * height)
     {
@@ -196,7 +214,7 @@ surface_from_pixmap_data (gint          width,
         copy[i + 3] = alpha;
         i += 4;
     }
-    g_printerr ("just before %s\n", copy);
+
     pixbuf = gdk_pixbuf_new_from_data (copy,
                                        GDK_COLORSPACE_RGB,
                                        TRUE, 8,
@@ -206,7 +224,7 @@ surface_from_pixmap_data (gint          width,
                                        NULL);
 
     if (pixbuf)
-    {g_printerr ("PIXBUF\n");
+    {
         GdkScreen *screen;
         GValue value = G_VALUE_INIT;
         gint scale = 1;
@@ -214,13 +232,13 @@ surface_from_pixmap_data (gint          width,
         g_value_init (&value, G_TYPE_INT);
 
         screen = gdk_screen_get_default ();
+
         if (gdk_screen_get_setting (screen, "gdk-window-scaling-factor", &value))
         {
             scale = g_value_get_int (&value);
         }
 
         surface = gdk_cairo_surface_create_from_pixbuf (pixbuf, scale, NULL);
-
         g_object_unref (pixbuf);
 
         return surface;
@@ -249,40 +267,24 @@ process_pixmaps (SnItem    *item,
     largest_width = largest_height = 0;
 
     g_variant_iter_init (&iter, pixmaps);
-    // g_variant_get (pixmaps, "a(iiay)", &iter);
 
-gsize getsize;
-guchar *t;
     while (g_variant_iter_loop (&iter, "(ii@ay)", &width, &height, &byte_array_var))
     {
         if (width > 0 & height > 0 &&
             ((width * height) > (largest_width * largest_height)))
         {
-            gsize data_size;
+            gsize data_size = g_variant_get_size (byte_array_var);
 
-            largest_width = width;
-            largest_height = height;
-
-            data_size = g_variant_get_size (byte_array_var);
-
-            if (best_image_bytes != NULL)
+            if (data_size == width * height * 4)
             {
                 g_clear_pointer (&best_image_bytes, g_bytes_unref);
+
+                largest_width = width;
+                largest_height = height;
+                best_image_bytes = g_variant_get_data_as_bytes (byte_array_var);
             }
-
-            best_image_bytes = g_variant_get_data_as_bytes (byte_array_var);
-
-t  = g_bytes_get_data (best_image_bytes, &getsize);           
-            g_printerr ("%s size: %lu (byteS: %lu) - '%s'\n",g_variant_get_type_string (byte_array_var), g_bytes_get_size (best_image_bytes),getsize, (gchar *) g_bytes_get_data (best_image_bytes, NULL));
-
-            // best_image_data = g_memdup (g_variant_get_data (byte_array_var), data_size);
         }
     }
-t  = g_bytes_get_data (best_image_bytes, &getsize);           
-g_printerr ("aaaaaaaaaaaaasize: %lu (byteS: %lu) - '%s'\n", g_bytes_get_size (best_image_bytes),getsize, (gchar *) g_bytes_get_data (best_image_bytes, NULL));
-
-    // g_variant_iter_free (iter);
-
 
     if (best_image_bytes == NULL)
     {
@@ -291,7 +293,6 @@ g_printerr ("aaaaaaaaaaaaasize: %lu (byteS: %lu) - '%s'\n", g_bytes_get_size (be
     }
 
     surface = surface_from_pixmap_data (largest_width, largest_height, best_image_bytes);
-    // g_free (best_image_data);
 
     if (cairo_surface_status (surface) != CAIRO_STATUS_SUCCESS)
     {
@@ -447,15 +448,13 @@ update_icon (SnItem *item)
     gchar *icon_name, *att_icon_name, *olay_icon_name;
 
     icon_theme_path = get_string_property (item, "IconThemePath");
-
     icon_name = get_string_property (item, "IconName");
     att_icon_name = get_string_property (item, "AttentionIconName");
     olay_icon_name = get_string_property (item, "OverlayIconName");
 
     if (icon_name || att_icon_name || olay_icon_name)
     {
-        g_printerr ("icon name '%s' '%s' '%s'\n", icon_name, att_icon_name, olay_icon_name);
-
+        // g_printerr ("icon name '%s' '%s' '%s'\n", icon_name, att_icon_name, olay_icon_name);
         set_icon_name_or_path (item,
                                icon_theme_path,
                                icon_name,
@@ -464,7 +463,6 @@ update_icon (SnItem *item)
     }
     else
     {
-        g_printerr ("pixmap...\n");
         set_icon_from_pixmap (item);
     }
 
@@ -490,7 +488,7 @@ update_menu (SnItem *item)
     }
 
     item->menu = GTK_WIDGET (dbusmenu_gtkmenu_new ((gchar *) g_dbus_proxy_get_name (item->sn_item_proxy), menu_path));
-    g_object_ref_sink (item->menu);
+    // g_object_ref_sink (item->menu);
 
     xapp_status_icon_set_secondary_menu (item->status_icon, GTK_MENU (item->menu));
 
