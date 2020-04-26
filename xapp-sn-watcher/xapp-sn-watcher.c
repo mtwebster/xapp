@@ -547,16 +547,21 @@ xapp_sn_watcher_class_init (XAppSnWatcherClass *class)
 }
 
 XAppSnWatcher *
-watcher_new (void)
+watcher_new (const gchar *current_desktop)
 {
-  XAppSnWatcher *watcher;
+    XAppSnWatcher *watcher;
+    gboolean _register;
 
-  g_set_application_name ("xapp-sn-watcher");
+    g_set_application_name ("xapp-sn-watcher");
 
-  watcher = g_object_new (xapp_sn_watcher_get_type (),
-                          "application-id", "org.x.StatusNotifierWatcher",
-                          "inactivity-timeout", 30000,
-                          NULL);
+    // FIXME: xfce-session crashes if we try to register.
+    _register = g_strcmp0 (current_desktop, "XFCE") != 0;
+
+    watcher = g_object_new (xapp_sn_watcher_get_type (),
+                            "application-id", "org.x.StatusNotifierWatcher",
+                            "inactivity-timeout", 30000,
+                            "register-session", _register,
+                            NULL);
 
   return watcher;
 }
@@ -590,7 +595,7 @@ main (int argc, char **argv)
         exit(0);
     }
 
-    watcher = watcher_new ();
+    watcher = watcher_new (current_desktop);
 
     status = g_application_run (G_APPLICATION (watcher), argc, argv);
 
