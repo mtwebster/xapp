@@ -254,6 +254,73 @@ synthesize_event (XAppStatusIcon *self,
   return event;
 }
 
+static gint
+adjust_y_for_monitor_bounds (gint init_x,
+                             gint init_y,
+                             gint menu_height)
+{
+    GdkDisplay *display = gdk_display_get_default ();
+    GdkMonitor *monitor;
+    GdkRectangle mrect;
+    gint bottom_edge_y;
+    gint ret_y;
+
+    ret_y = init_y;
+
+    monitor = gdk_display_get_monitor_at_point (display,
+                                                init_x,
+                                                init_y);
+
+    gdk_monitor_get_workarea (monitor, &mrect);
+
+    bottom_edge_y = mrect.y + mrect.height;
+
+    if ((init_y + menu_height) > bottom_edge_y)
+    {
+        ret_y = bottom_edge_y - menu_height;
+    }
+
+    return ret_y;
+}
+
+typedef struct {
+    gint    x;
+    gint    y;
+    gint    position;
+    guint32 t;
+} PositionData;
+
+static void
+position_menu_cb (GtkMenu  *menu,
+                  gint     *x,
+                  gint     *y,
+                  gboolean *push_in,
+                  gpointer  user_data)
+{
+    GtkAllocation alloc;
+    PositionData *position_data = (PositionData *) user_data;
+
+    *x = position_data->x;
+    *y = position_data->y;
+
+    gtk_widget_get_allocation (GTK_WIDGET (menu), &alloc);
+
+    switch (position_data->position) {
+        case GTK_POS_BOTTOM:
+            *y = *y - alloc.height;
+            break;
+        case GTK_POS_RIGHT:
+            *x = *x - alloc.width;
+            *y = adjust_y_for_monitor_bounds (position_data->x, position_data->y, alloc.height);
+            break;
+        case GTK_POS_LEFT:
+            *y = adjust_y_for_monitor_bounds (position_data->x, position_data->y, alloc.height);
+            break;
+    }
+
+    *push_in = TRUE;
+}
+
 static void
 popup_menu (XAppStatusIcon *self,
             GtkMenu        *menu,
@@ -263,27 +330,64 @@ popup_menu (XAppStatusIcon *self,
             guint           _time,
             gint            panel_position)
 {
-    GdkWindow *rect_window;
-    GdkEvent *event;
-    GdkRectangle win_rect;
-    GdkGravity rect_anchor, menu_anchor;
+    GdkDisplay *display;
+    GdkDevice *pointer;
 
     g_debug ("XAppStatusIcon: Popup menu on behalf of application");
 
-    event = synthesize_event (self,
-                              x, y, button, _time, panel_position,
-                              &rect_window, &win_rect, &rect_anchor, &menu_anchor);
+    PositionData position_data = {
+        x, y, panel_position, _time
+    };
 
-    gtk_menu_popup_at_rect (menu,
-                            rect_window,
-                            &win_rect,
-                            rect_anchor,
-                            menu_anchor,
-                            event);
+    display = gdk_display_get_default ();
+    pointer = gdk_device_manager_get_client_pointer (gdk_display_get_device_manager (display));
 
-    gdk_event_free (event);
-    gdk_window_destroy (rect_window);
+    g_object_set (G_OBJECT (menu),
+                  "anchor-hints", DK_ANCHOR_FLIP_X | GDK_ANCHOR_FLIP_Y | GDK_ANCHOR_SLIDE_X | GDK_ANCHOR_SLIDE_Y,
+                  NULL);
+
+    gtk_menu_popup_for_device (menu,
+                               pointer,
+                               NULL,
+                               NULL,
+                               position_menu_cb,
+                               &position_data,
+                               NULL,
+                               button,
+                               _time);
 }
+
+
+// static void
+// popup_menu (XAppStatusIcon *self,
+//             GtkMenu        *menu,
+//             gint            x,
+//             gint            y,
+//             guint           button,
+//             guint           _time,
+//             gint            panel_position)
+// {
+//     GdkWindow *rect_window;
+//     GdkEvent *event;
+//     GdkRectangle win_rect;
+//     GdkGravity rect_anchor, menu_anchor;
+
+//     g_debug ("XAppStatusIcon: Popup menu on behalf of application");
+
+//     event = synthesize_event (self,
+//                               x, y, button, _time, panel_position,
+//                               &rect_window, &win_rect, &rect_anchor, &menu_anchor);
+
+//     gtk_menu_popup_at_rect (menu,
+//                             rect_window,
+//                             &win_rect,
+//                             rect_anchor,
+//                             menu_anchor,
+//                             event);
+
+//     gdk_event_free (event);
+//     gdk_window_destroy (rect_window);
+// }
 
 static gboolean
 should_send_activate (XAppStatusIcon *icon,
