@@ -1,10 +1,13 @@
 #include <config.h>
 #include <gtk/gtk.h>
+#include <glib/gi18n-lib.h>
 
 #include "xapp-favorites.h"
+#include "xapp-status-icon.h"
 #include "favorite-vfs-file.h"
 
 #define ICON_OVERRIDE_VAR "XAPP_FORCE_GTKWINDOW_ICON"
+#define STATUS_ICON_VAR "XAPP_ADD_STATUS_ICON"
 
 /* xapp-gtk3-module:
  *
@@ -91,6 +94,62 @@ window_icon_changed (GtkWindow *window)
 }
 
 static void
+status_icon_activate (GtkWidget *widget)
+{
+    if (gtk_widget_get_visible (widget))
+    {
+        gtk_widget_hide (widget);
+    }
+    else
+    {
+        gtk_window_present (GTK_WINDOW (widget));
+    }
+}
+
+static void
+show_hide_activate (GtkMenuItem *item,
+                    gpointer     user_data)
+{
+    status_icon_activate (user_data);
+}
+
+static void
+quit_activate (GtkMenuItem *item,
+               gpointer     user_data)
+{
+    raise (SIGTERM);
+}
+
+static void
+setup_status_icon (GtkWidget   *widget,
+                   const gchar *app_name)
+{
+    XAppStatusIcon *icon;
+    GtkWidget *menu;
+    GtkWidget *item;
+
+    icon = xapp_status_icon_new ();
+    xapp_status_icon_set_icon_name (icon, gtk_window_get_icon_name (GTK_WINDOW (widget)));
+    xapp_status_icon_set_tooltip_text (icon, app_name);
+
+    g_signal_connect_swapped (icon, "activate", G_CALLBACK (status_icon_activate), widget);
+
+    menu = gtk_menu_new ();
+
+    item = gtk_menu_item_new_with_label (_("Show"));
+    g_signal_connect_swapped (item, "activate", G_CALLBACK (show_hide_activate), widget);
+    gtk_container_add (GTK_CONTAINER (menu), item);
+
+    item = gtk_menu_item_new_with_label (_("Quit"));
+    g_signal_connect_swapped (item, "activate", G_CALLBACK (quit_activate), widget);
+    gtk_container_add (GTK_CONTAINER (menu), item);
+
+    gtk_widget_show_all (menu);
+
+    xapp_status_icon_set_secondary_menu (icon, GTK_MENU (menu));
+}
+
+static void
 overridden_window_realize (GtkWidget *widget)
 {
     (* original_window_realize) (widget);
@@ -105,15 +164,23 @@ overridden_window_realize (GtkWidget *widget)
 
     g_debug ("Realize overridden window (%p).", widget);
 
-    const gchar *env_icon = g_getenv (ICON_OVERRIDE_VAR);
+    const gchar *env_var;
+    env_var = g_getenv (ICON_OVERRIDE_VAR);
 
-    if (env_icon != NULL)
+    if (env_var != NULL)
     {
-        g_object_set_data_full (G_OBJECT (widget), "xapp-forced-window-icon", g_strdup (env_icon), g_free);
+        g_object_set_data_full (G_OBJECT (widget), "xapp-forced-window-icon", g_strdup (env_var), g_free);
         window_icon_changed (GTK_WINDOW (widget));
 
         g_signal_connect_swapped (widget, "notify::icon", G_CALLBACK (window_icon_changed), widget);
         g_signal_connect_swapped (widget, "notify::icon-name", G_CALLBACK (window_icon_changed), widget);
+    }
+
+    env_var = g_getenv (STATUS_ICON_VAR);
+
+    if (env_var != NULL)
+    {
+        setup_status_icon (widget, env_var);
     }
 }
 
@@ -176,7 +243,7 @@ G_MODULE_EXPORT void gtk_module_init (gint *argc, gchar ***argv[]) {
     init_favorite_vfs ();
     apply_sidebar_favorites_override ();
 
-    if (g_getenv (ICON_OVERRIDE_VAR) != NULL)
+    if (g_getenv (ICON_OVERRIDE_VAR) != NULL || g_getenv (STATUS_ICON_VAR) != NULL)
     {
         apply_window_icon_override ();
     }
