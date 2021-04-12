@@ -10,6 +10,7 @@
 
 #include <gdk/gdkx.h>
 #include <gtk/gtk.h>
+#include <X11/Xatom.h>
 
 #include <glib/gi18n-lib.h>
 
@@ -87,6 +88,8 @@ typedef struct
     GtkStatusIcon *gtk_status_icon;
     GtkWidget *primary_menu;
     GtkWidget *secondary_menu;
+    GtkWidget *timestamp_widget;
+    Window timestamp_widget_xid;
 
     XAppStatusIconState state;
 
@@ -195,12 +198,36 @@ direction_to_str (XAppScrollDirection direction)
     }
 }
 
+static guint32
+get_current_server_time (XAppStatusIcon *self)
+{
+    GdkDisplay *display;
+    guint32 timestamp;
+    XEvent property_event;
+
+    display = gdk_display_get_default ();
+
+  /* Using the property XA_PRIMARY because it's safe; nothing
+   * would use it as a property. The type doesn't matter.
+   */
+  XChangeProperty (GDK_DISPLAY_XDISPLAY (display),
+                   self->priv->timestamp_widget_xid,
+                   XA_PRIMARY, XA_STRING, 8,
+                   PropModeAppend, NULL, 0);
+  XWindowEvent (GDK_DISPLAY_XDISPLAY (display),
+                self->priv->timestamp_widget_xid,
+                PropertyChangeMask,
+                &property_event);
+  timestamp = property_event.xproperty.time;
+
+  return timestamp;
+}
+
 static GdkEvent *
 synthesize_event (XAppStatusIcon *self,
                   gint            x,
                   gint            y,
                   guint           button,
-                  guint           _time,
                   gint            position,
                   GdkWindow     **rect_window,
                   GdkRectangle   *win_rect,
@@ -263,6 +290,7 @@ synthesize_event (XAppStatusIcon *self,
   GdkEvent *event = gdk_event_new (GDK_BUTTON_RELEASE);
   event->any.window = window;
   event->button.device = gdk_seat_get_pointer (seat);
+  event->button.time = get_current_server_time (self);
 
   return event;
 }
@@ -363,7 +391,7 @@ popup_menu (XAppStatusIcon *self,
     }
 
     event = synthesize_event (self,
-                              x, y, button, _time, panel_position,
+                              x, y, button, panel_position,
                               &rect_window, &win_rect, &rect_anchor, &menu_anchor);
 
     g_object_set (G_OBJECT (menu),
@@ -439,20 +467,21 @@ handle_click_method (XAppStatusIconInterface *skeleton,
                      XAppStatusIcon          *icon)
 {
     const gchar *name = g_dbus_method_invocation_get_method_name (invocation);
+    guint32 server_time = get_current_server_time (icon);
 
     if (g_strcmp0 (name, "ButtonPress") == 0)
     {
         DEBUG ("Received ButtonPress from monitor %s: "
                  "pos:%d,%d , button: %s , time: %u , orientation: %s",
                  g_dbus_method_invocation_get_sender (invocation),
-                 x, y, button_to_str (button), _time, panel_position_to_str (panel_position));
+                 x, y, button_to_str (button), server_time, panel_position_to_str (panel_position));
 
         if (should_send_activate (icon, button))
         {
             DEBUG ("Native sending 'activate' for %s button", button_to_str (button));
             g_signal_emit (icon, signals[ACTIVATE], 0,
                            button,
-                           _time);
+                           server_time);
         }
 
         icon->priv->have_button_press = TRUE;
@@ -460,7 +489,7 @@ handle_click_method (XAppStatusIconInterface *skeleton,
         g_signal_emit (icon, signals[BUTTON_PRESS], 0,
                        x, y,
                        button,
-                       _time,
+                       server_time,
                        panel_position);
 
         xapp_status_icon_interface_complete_button_press (skeleton,
@@ -472,7 +501,7 @@ handle_click_method (XAppStatusIconInterface *skeleton,
         DEBUG ("Received ButtonRelease from monitor %s: "
                  "pos:%d,%d , button: %s , time: %u , orientation: %s",
                  g_dbus_method_invocation_get_sender (invocation),
-                 x, y, button_to_str (button), _time, panel_position_to_str (panel_position));
+                 x, y, button_to_str (button), server_time, panel_position_to_str (panel_position));
 
         if (icon->priv->have_button_press)
         {
@@ -484,14 +513,14 @@ handle_click_method (XAppStatusIconInterface *skeleton,
                             GTK_MENU (menu_to_use),
                             x, y,
                             button,
-                            _time,
+                            server_time,
                             panel_position);
             }
 
             g_signal_emit (icon, signals[BUTTON_RELEASE], 0,
                            x, y,
                            button,
-                           _time,
+                           server_time,
                            panel_position);
         }
 
@@ -512,15 +541,17 @@ handle_scroll_method (XAppStatusIconInterface *skeleton,
                       guint                    _time,
                       XAppStatusIcon          *icon)
 {
+    guint32 server_time = get_current_server_time (icon);
+
     DEBUG ("Received Scroll from monitor %s: "
              "delta: %d , direction: %s , time: %u",
              g_dbus_method_invocation_get_sender (invocation),
-             delta, direction_to_str (direction), _time);
+             delta, direction_to_str (direction), server_time);
 
     g_signal_emit(icon, signals[SCROLL], 0,
                   delta,
                   direction,
-                  _time);
+                  server_time);
 
     xapp_status_icon_interface_complete_scroll (skeleton,
                                                 invocation);
@@ -1220,6 +1251,11 @@ xapp_status_icon_init (XAppStatusIcon *self)
     self->priv->icon_size = FALLBACK_ICON_SIZE;
     self->priv->icon_name = g_strdup (" ");
 
+    self->priv->timestamp_widget = gtk_invisible_new ();
+    g_object_ref_sink (self->priv->timestamp_widget);
+    gtk_widget_realize (self->priv->timestamp_widget);
+    self->priv->timestamp_widget_xid = gdk_x11_window_get_xid (gtk_widget_get_window (self->priv->timestamp_widget));
+
     DEBUG ("Init: application name: '%s'", self->priv->name);
 
     // Default to visible (the same behavior as GtkStatusIcon)
@@ -1265,6 +1301,8 @@ xapp_status_icon_dispose (GObject *object)
 
     g_clear_object (&self->priv->primary_menu);
     g_clear_object (&self->priv->secondary_menu);
+    g_clear_object (&self->priv->timestamp_widget);
+    self->priv->timestamp_widget_xid = 0;
 
     if (self->priv->gtk_status_icon != NULL)
     {
