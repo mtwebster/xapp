@@ -19,9 +19,43 @@
  */
 
 void gtk_module_init (gint *argc, gchar ***argv[]);
+static void (* original_file_chooser_constructed) (GObject *object);
 static void (* original_sidebar_constructed) (GObject *object);
 static void (* original_window_realize) (GtkWidget *widget);
 static void (* original_window_unrealize) (GtkWidget *widget);
+
+static gboolean
+file_chooser_press_event (GtkWidget *widget, GdkEvent *event, gpointer data)
+{
+    GtkFileChooser *chooser = GTK_FILE_CHOOSER (widget);
+
+    if (event->key.keyval == GDK_KEY_BackSpace)
+    {
+        GFile *current, *parent;
+
+        current = gtk_file_chooser_get_current_folder_file (chooser);
+        parent = g_file_get_parent (current);
+
+        if (parent != NULL)
+        {
+            gtk_file_chooser_set_current_folder_file (chooser, parent, NULL);
+        }
+
+        return GDK_EVENT_STOP;
+    }
+
+    return GDK_EVENT_PROPAGATE;
+}
+
+static void
+xapp_file_chooser_constructed (GObject *object)
+{
+    GtkFileChooser *chooser = GTK_FILE_CHOOSER (object);
+
+    g_signal_connect (chooser, "key-press-event", G_CALLBACK (file_chooser_press_event), NULL);
+
+    (* original_file_chooser_constructed) (object);
+}
 
 static void
 xapp_sidebar_constructed (GObject *object)
@@ -153,6 +187,25 @@ apply_window_icon_override (void)
 }
 
 static void
+apply_file_chooser_override (void)
+{
+    static gboolean applied = 0;
+
+    if (!applied)
+    {
+        DEBUG ("Adding backspace navigation behavior to GtkFileChooserDialog");
+
+        applied = TRUE;
+
+        GObjectClass *object_class;
+        object_class = g_type_class_ref (GTK_TYPE_FILE_CHOOSER_WIDGET);
+
+        original_file_chooser_constructed = object_class->constructed;
+        object_class->constructed = xapp_file_chooser_constructed;
+    }
+}
+
+static void
 apply_sidebar_favorites_override (void)
 {
     static gboolean applied = 0;
@@ -178,6 +231,7 @@ G_MODULE_EXPORT void gtk_module_init (gint *argc, gchar ***argv[]) {
     // but just adds favorites:/// to its sidebar.)
     init_favorite_vfs ();
     apply_sidebar_favorites_override ();
+    apply_file_chooser_override ();
 
     if (g_getenv (ICON_OVERRIDE_VAR) != NULL)
     {
